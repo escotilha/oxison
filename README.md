@@ -62,6 +62,16 @@ project's tests. It is contained by three layers:
    (verified against `srt` 1.0.0); if it's missing, `oxison build` fails at
    preflight with an install hint. `--no-sandbox` disables it (loud stderr
    warning) for trusted local runs.
+
+   > **Why the sandbox is the default — and what `--no-sandbox` gives up.** A
+   > build worker's prompt is assembled from the roadmap, which derives from
+   > repository and (in greenfield) web-fetched content — i.e. **untrusted
+   > input**. A malicious README or page could attempt prompt injection to steer
+   > the write-capable worker. The srt sandbox is what contains that: an injected
+   > worker still can't escape the worktree, read credentials, or exfiltrate.
+   > `--no-sandbox` removes that containment, so only use it on repos and sources
+   > you fully trust. (The grader in step 3 is a backstop, not a substitute — it
+   > inspects the *diff*, not the worker's runtime behavior.)
 2. **Worktree isolation** — each worker runs in its own git worktree under
    `oxison-build/worktrees/`, so the repo's main working tree is never edited.
 3. **A grader** — rejects any diff that touches a protected path

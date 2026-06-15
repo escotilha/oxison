@@ -86,3 +86,41 @@ def test_extract_bad_scheme_skips_without_fetch() -> None:
     res = WebAdapter().extract("file:///etc/passwd")
     assert res.status == "skipped"
     assert "scheme" in (res.reason or "")
+
+
+# --- SSRF guard (C1) — offline: literal IPs resolve to themselves, no DNS -----
+
+
+def test_host_is_blocked_for_internal_targets():
+    from oxison.sources.web import _host_is_blocked
+    assert _host_is_blocked("169.254.169.254")   # cloud metadata
+    assert _host_is_blocked("127.0.0.1")          # loopback
+    assert _host_is_blocked("10.0.0.1")           # RFC-1918
+    assert _host_is_blocked("192.168.1.10")       # RFC-1918
+    assert _host_is_blocked("::1")                # IPv6 loopback
+    assert _host_is_blocked("")                   # fail-closed
+    assert _host_is_blocked(None)
+
+
+def test_host_not_blocked_for_public_ip():
+    from oxison.sources.web import _host_is_blocked
+    assert not _host_is_blocked("8.8.8.8")        # public literal (offline-safe)
+    assert not _host_is_blocked("93.184.216.34")
+
+
+def test_require_allowed_rejects_internal_and_bad_scheme():
+    from oxison.sources.web import BlockedURLError, _require_allowed
+    for bad in ("http://169.254.169.254/latest/meta-data/",
+                "http://10.0.0.1/", "https://127.0.0.1:8080/admin"):
+        with pytest.raises(BlockedURLError):
+            _require_allowed(bad)
+    with pytest.raises(BlockedURLError):
+        _require_allowed("ftp://example.com/x")
+
+
+def test_extract_blocks_metadata_url_without_network():
+    # detect() passes (http), but _fetch's guard raises before any open() →
+    # extract returns a skip with a "blocked" reason. No network touched.
+    res = WebAdapter().extract("http://169.254.169.254/latest/meta-data/")
+    assert res.status == "skipped"
+    assert "blocked" in (res.reason or "")
