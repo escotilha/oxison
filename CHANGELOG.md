@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0] — 2026-06-15
 
 ### Added
 - **Model providers — `--provider kimi` / `--provider grok`.** Run the whole
