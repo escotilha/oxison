@@ -20,7 +20,6 @@ oxison run /path/to/repo
 - The **[Claude Code](https://claude.com/claude-code) CLI**, installed and signed in
   (oxison drives it as a subprocess; by default it uses your existing Claude Code login —
   see [Auth](#auth))
-- Read access to the oxison repo to install it (`gh auth login`, or a token/SSH key) — see [Install](#install)
 
 ## Safety model
 
@@ -297,9 +296,7 @@ uvx --from . oxison run /path/to/repo      # zero-install, from a clone
 pip install -e . && oxison run /path/to/repo
 ```
 
-While the repo is private, the Git install methods need read access to it
-(`gh auth login`, or a token/SSH key with access). Requires **Python ≥
-3.11** and the **Claude Code CLI** installed and signed in.
+Requires **Python ≥ 3.11** and the **Claude Code CLI** installed and signed in.
 
 ## Auth
 
