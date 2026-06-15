@@ -31,6 +31,7 @@ from dataclasses import dataclass
 
 from .dispatch import DispatchOutcome
 from .gates import GradeVerdict
+from .integrate import Integrator
 from .taskstore import STATUS_PLANNED, STATUS_PLANNING, Task, TaskStore
 
 Dispatcher = Callable[[Task, str], Awaitable[DispatchOutcome]]
@@ -71,6 +72,9 @@ class LoopSummary:
     failed: int
     spent_usd: float
     halt_reason: str
+    #: How many graded tasks were git-merged into main (only when an integrator
+    #: is wired, i.e. ``--integrate``); 0 in the default per-branch mode.
+    integrated: int = 0
 
 
 def _eligible(store: TaskStore, options: LoopOptions) -> list[Task]:
@@ -93,8 +97,16 @@ async def run_build_loop(
     grader: Grader,
     now_fn: NowFn,
     now_epoch_fn: NowEpochFn,
+    integrator: Integrator | None = None,
 ) -> LoopSummary:
-    """Drive the build loop to a halt. Returns a summary of what happened."""
+    """Drive the build loop to a halt. Returns a summary of what happened.
+
+    When ``integrator`` is set, each graded-accepted task is git-merged into the
+    repo's current branch (composing the roadmap into one product); a merge
+    conflict fails the task (``failure_class="integration"``) and never advances
+    main. When ``None`` (the default), accepted tasks are marked merged in the DB
+    only — the per-branch "human merge boundary" behavior.
+    """
     # Startup reconciliation: a task left ``dispatched`` is the residue of a
     # crash between mark_dispatched and recording its outcome. Return it to
     # ``planned`` (free, via I4) and free any locks it orphaned, so the durable
@@ -111,11 +123,12 @@ async def run_build_loop(
     dispatched = 0
     merged = 0
     failed = 0
+    integrated = 0
 
     def summary(reason: str) -> LoopSummary:
         return LoopSummary(
             ticks=tick, dispatched=dispatched, merged=merged, failed=failed,
-            spent_usd=round(spent, 6), halt_reason=reason,
+            spent_usd=round(spent, 6), halt_reason=reason, integrated=integrated,
         )
 
     while True:
@@ -183,13 +196,27 @@ async def run_build_loop(
                     progressed = True
                 else:
                     verdict = grader(outcome)
-                    if verdict.ok:
-                        store.mark_merged(task.identifier, now=now_fn())
-                        merged += 1
-                    else:
+                    if not verdict.ok:
                         store.mark_failed(task.identifier, now=now_fn(),
                                           reason=verdict.reason, failure_class="grader")
                         failed += 1
+                    elif integrator is None:
+                        # Default: DB-only merge boundary (per-branch, no git advance).
+                        store.mark_merged(task.identifier, now=now_fn())
+                        merged += 1
+                    else:
+                        # Integration mode: actually merge the branch into main.
+                        merge = await integrator(task, outcome)
+                        if merge.ok:
+                            store.mark_merged(task.identifier, now=now_fn())
+                            merged += 1
+                            integrated += 1
+                        else:
+                            # Conflict/failure: main is NOT advanced. Burn a retry
+                            # under a distinct class so LP2 accounting stays honest.
+                            store.mark_failed(task.identifier, now=now_fn(),
+                                              reason=merge.reason, failure_class="integration")
+                            failed += 1
                     progressed = True
             except Exception as exc:  # noqa: BLE001 — dispatcher infra error is engine-side
                 store.mark_adapter_failure(task.identifier, reason=f"dispatch error: {exc}")
@@ -219,6 +246,7 @@ __all__ = [
     "HALT_NO_PROGRESS",
     "Dispatcher",
     "Grader",
+    "Integrator",
     "LoopOptions",
     "LoopSummary",
     "run_build_loop",
