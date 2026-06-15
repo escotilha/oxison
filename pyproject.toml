@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "oxi-son"
+version = "0.1.0"
+description = "Point it at any repo; it comprehends the code and writes the product docs (PRODUCT / MANUAL / STACK)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "escotilha" }]
+keywords = ["claude", "code-comprehension", "documentation", "cli", "ai"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Environment :: Console",
+    "Topic :: Software Development :: Documentation",
+]
+dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+pretty = ["rich>=13"]
+pdf = ["pypdf>=4"]
+pptx = ["python-pptx>=0.6"]
+docx = ["python-docx>=1.1"]
+dev = ["ruff>=0.6", "mypy>=1.10", "pytest>=8", "pytest-asyncio>=0.23"]
+sources = ["pypdf>=4", "python-pptx>=0.6", "python-docx>=1.1"]
+# Note: the roadmap branch works on any roadmap via claude -p. If a
+# private `oxi_core` roadmap-parser package happens to be importable,
+# oxison opportunistically uses it for extra structure — but it is NOT a
+# declared dependency (oxi_core is not published).
+
+[project.scripts]
+oxison = "oxison.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/escotilha/oxison"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "C4", "SIM"]
+# S603/S607: we intentionally use argv-form subprocess with managed env.
+ignore = ["S603", "S607"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # asserts are the point in tests
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+files = ["src"]
+
+# Optional source-adapter dependencies (the `pdf`/`pptx`/`docx` extras) are
+# lazy-imported behind availability checks, so they are NOT installed in the
+# base CI env (`.[dev]`). Tell mypy these third-party modules have no stubs
+# rather than installing them — the adapters degrade gracefully when absent.
+# `ignore_missing_imports` is exempt from `warn_unused_ignores`, so this stays
+# clean whether or not the extras happen to be installed.
+[[tool.mypy.overrides]]
+module = ["pypdf", "pptx", "docx", "docx.*", "pptx.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

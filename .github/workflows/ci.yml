@@ -1,0 +1,178 @@
+# CI workflow for oxison.
+#
+# Runner strategy:
+#   - Default to GitHub-hosted ubuntu-latest. The OXISON_RUNNER
+#     repo-scoped Variable overrides every job uniformly — set it to a
+#     self-hosted label (e.g. the VPS runner) or a faster-runner vendor
+#     label once that's wired up. Only the repo admin can edit Variables,
+#     and the value flows only into runs-on:, never into a run: block.
+#
+# Security review notes (per GitHub Actions injection guidance):
+#   - No github.event.* interpolation anywhere in run: blocks.
+#   - No user-controlled inputs (PR titles, bodies, commit messages,
+#     branch refs) reach any shell command.
+#   - permissions defaults to contents: read; the CodeQL job additionally
+#     takes actions: read (SARIF fingerprint enrichment) and
+#     security-events: write (publish findings to the Security tab).
+#   - Third-party actions pinned to full commit SHAs (not mutable tags)
+#     per OpenSSF guidance.
+#
+# Note if you enable a self-hosted runner (OXISON_RUNNER): gate `pull_request`
+# so fork-PR runs don't execute untrusted code on it (require approval, or
+# scope to same-repo PRs). Not needed on the default GitHub-hosted
+# ubuntu-latest, which is a fresh, throwaway VM per job.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref so rapid pushes don't queue —
+# matters most when OXISON_RUNNER points at a single self-hosted runner.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: python ${{ matrix.python-version }}
+    runs-on: ${{ vars.OXISON_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install oxison (editable) + dev deps
+        # Security review: no github.event.* interpolation; static target.
+        # [dev,sources] ensures source-adapter optional deps (pypdf, python-pptx,
+        # python-docx) are installed so the source-adapter tests (incl. the OCR
+        # asyncio-in-running-loop regression) run in CI instead of being skipped.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,sources]"
+      - name: Ruff (lint)
+        run: ruff check .
+      - name: Mypy (strict)
+        run: mypy src
+      - name: Pytest
+        run: pytest -q
+
+  gitleaks:
+    name: gitleaks (secret patterns)
+    runs-on: ${{ vars.OXISON_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    # We invoke the gitleaks CLI directly rather than the
+    # gitleaks/gitleaks-action wrapper: the wrapper requires a paid
+    # license for any account it identifies as an organisation. The
+    # scanner itself is open-source and unrestricted — same rules.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks CLI
+        # Pin to a release tag (not `latest`) so a rule-set update can't
+        # change scan behaviour mid-PR. Bump deliberately.
+        env:
+          GITLEAKS_VERSION: 8.21.2
+          # SHA256 of gitleaks_8.21.2_linux_x64.tar.gz from the upstream
+          # checksums.txt. Verify the download before extracting so a
+          # compromised release CDN can't ship a different binary. Update
+          # alongside GITLEAKS_VERSION.
+          GITLEAKS_SHA256: 5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
+        run: |
+          set -euo pipefail
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${asset}"
+          curl -sSL "$url" -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Run gitleaks
+        run: |
+          gitleaks detect \
+            --source . \
+            --redact \
+            --exit-code 1 \
+            --verbose
+
+  pip-audit:
+    name: pip-audit (dependency CVEs)
+    runs-on: ${{ vars.OXISON_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit + oxison
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          python -m pip install -e ".[dev]"
+      - name: Run pip-audit
+        # pip freeze --exclude-editable drops oxison itself (not on PyPI
+        # at this version), so the scan targets only third-party deps.
+        # --strict turns any finding into a CI fail.
+        run: |
+          python -m pip freeze --exclude-editable > /tmp/audit-reqs.txt
+          pip-audit --strict -r /tmp/audit-reqs.txt
+
+  bandit:
+    name: bandit (Python SAST)
+    runs-on: ${{ vars.OXISON_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install bandit
+        run: python -m pip install --upgrade pip "bandit[toml]>=1.8"
+      - name: Run bandit
+        # B603 (subprocess_without_shell_equals_true) and B607
+        # (start_process_with_partial_path) are skipped: oxison
+        # deliberately uses argv-form list subprocess and resolves the
+        # `claude` binary via the operator's PATH by design — the same
+        # two checks ruff already ignores (S603/S607) in pyproject.toml.
+        # B602 (shell=True) is NOT skipped; a regression there is real.
+        run: |
+          bandit -r src \
+            --skip B603,B607 \
+            --severity-level medium \
+            --confidence-level medium
+
+  codeql:
+    name: CodeQL (Python taint analysis)
+    runs-on: ${{ vars.OXISON_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    # Public repo: CodeQL findings publish to the Security tab via SARIF upload.
+    # `security-events: write` authorizes the upload; `actions: read` lets the
+    # codeql-action enrich SARIF fingerprints via the Actions API.
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@b2f9ef845756500b97acbdaf5c1dd4e9c1d15734  # v3.35.2
+        with:
+          languages: python
+          queries: security-extended
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@b2f9ef845756500b97acbdaf5c1dd4e9c1d15734  # v3.35.2
+        with:
+          category: "/language:python"

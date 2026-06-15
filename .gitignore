@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# oxison output (never commit generated artifacts or run manifests)
+oxison-output/
+.oxison-run.json
+
+# oxfaz build-engine state: worktrees, container clones, state.db, and worker
+# logs (which hold the worker's full stream-json — prompts + task content)
+oxison-build/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Claude Code session state (hooks, claim markers) — never tracked
+.claude/
+
+# CTO swarm review artifacts (internal engineering scratch) — never tracked
+.cto/
