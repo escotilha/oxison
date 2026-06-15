@@ -167,11 +167,13 @@ async def plan(
     generated_at: str,
     user_guidance: str = "",
     max_tasks: int = DEFAULT_MAX_TASKS,
+    greenfield: bool = False,
 ) -> PlanResult:
     """Produce a gated roadmap from a comprehension, self-correcting once.
 
     ``generated_at`` is stamped at the CLI boundary and threaded in (oxison
-    never calls ``datetime.now()`` inside a library function).
+    never calls ``datetime.now()`` inside a library function). ``greenfield``
+    reframes the plan as an initial from-scratch build (Oxideia).
     """
     markdown = comprehension.get("comprehension_markdown") or comprehension.get(
         "comprehension", ""
@@ -193,6 +195,7 @@ async def plan(
             open_questions=questions,
             user_guidance=user_guidance,
             prior_errors=prior_errors,
+            greenfield=greenfield,
         )
         result = await invoke(
             prompt,

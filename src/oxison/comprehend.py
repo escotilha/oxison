@@ -18,7 +18,12 @@ from dataclasses import dataclass, field
 
 from .config import READ_ONLY_TOOLS, RunConfig
 from .dispatch import InvokeResult, invoke
-from .prompts import single_pass_prompt, slice_prompt, synthesis_prompt
+from .prompts import (
+    greenfield_comprehension_prompt,
+    single_pass_prompt,
+    slice_prompt,
+    synthesis_prompt,
+)
 from .repomap import RepoMap, estimate_tokens, top_level_dirs
 
 #: Per-worker wall-clock timeout (seconds). Comprehension reads files;
@@ -53,13 +58,16 @@ def _require_ok(result: InvokeResult, what: str) -> None:
 
 
 async def _comprehend_single(
-    cfg: RunConfig, repo_map: RepoMap, *, extra_context: str = ""
+    cfg: RunConfig, repo_map: RepoMap, *, extra_context: str = "", mode: str = "repo"
 ) -> Comprehension:
-    prompt = single_pass_prompt(
-        root=repo_map.root,
-        repo_map_context=repo_map.to_context(),
-        extra_context=extra_context,
-    )
+    if mode == "greenfield":
+        prompt = greenfield_comprehension_prompt(extra_context=extra_context)
+    else:
+        prompt = single_pass_prompt(
+            root=repo_map.root,
+            repo_map_context=repo_map.to_context(),
+            extra_context=extra_context,
+        )
     result = await invoke(
         prompt,
         cfg=cfg,
@@ -132,9 +140,17 @@ async def _comprehend_mapreduce(
 
 
 async def comprehend(
-    cfg: RunConfig, repo_map: RepoMap, *, extra_context: str = ""
+    cfg: RunConfig, repo_map: RepoMap, *, extra_context: str = "", mode: str = "repo"
 ) -> Comprehension:
-    """Comprehend the repo, choosing single-pass vs map-reduce by size."""
+    """Comprehend, choosing single-pass vs map-reduce by size.
+
+    ``mode="greenfield"`` always runs a single pass over the brief + sources
+    (no repo to slice) using the greenfield prompt.
+    """
+    if mode == "greenfield":
+        return await _comprehend_single(
+            cfg, repo_map, extra_context=extra_context, mode="greenfield"
+        )
     est = estimate_tokens(repo_map)
     if est <= cfg.chunk_threshold:
         return await _comprehend_single(cfg, repo_map, extra_context=extra_context)

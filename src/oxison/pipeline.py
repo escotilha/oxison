@@ -8,6 +8,7 @@ oxison owns every write; all output lands under ``cfg.output_dir``.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,9 +18,10 @@ from .comprehension_doc import build_comprehension_doc
 from .config import RunConfig
 from .generate import ARTIFACTS, GenerationError, generate
 from .manifest import RunManifest
+from .oxipensa_gate import DEFAULT_MAX_TASKS
 from .repomap import build_repo_map, estimate_tokens
-from .sources.base import SourceResult
-from .sources.ingest import ingest_paths, render_extra_context
+from .sources.base import SourceResult, SourceUnit
+from .sources.ingest import brief_unit, ingest_paths, ingest_urls, render_extra_context
 
 COMPREHENSION_FILENAME = "COMPREHENSION.md"
 COMPREHENSION_JSON_FILENAME = "comprehension.json"
@@ -178,9 +180,128 @@ async def run_pipeline(cfg: RunConfig, manifest: RunManifest) -> int:
     return 0
 
 
+async def greenfield_pipeline(
+    cfg: RunConfig,
+    *,
+    user_guidance: str = "",
+    max_tasks: int = DEFAULT_MAX_TASKS,
+) -> int:
+    """Oxideia: start from a brief + non-repo sources (NO repo) → comprehension
+    + PRODUCT.md, then an initial ROADMAP. oxison owns every write.
+
+    No manifest/resume (greenfield is one-shot). The worker ``cwd`` is the empty
+    staging dir in ``cfg.target``; workers stay read-only.
+    """
+    from .oxipensa import (
+        ROADMAP_JSON_FILENAME,
+        ROADMAP_MD_FILENAME,
+        PlanError,
+    )
+    from .oxipensa import plan as run_plan
+    from .roadmap_doc import render_roadmap_md
+
+    print("→ Oxideia: greenfield mode — planning from your brief + sources (no repo)")
+    repo_map = build_repo_map(cfg.target)  # empty staging dir; repomap.json not written
+
+    # --- ingest: brief + file sources + URLs (all deterministic) ---
+    results: list[SourceResult] = []
+    units: list[SourceUnit] = []
+    if cfg.brief:
+        bu = brief_unit(cfg.brief)
+        results.append(SourceResult.ok("brief", "brief:idea", units=[bu]))
+        units.append(bu)
+    if cfg.extra_sources:
+        ing = ingest_paths(
+            [Path(p) for p in cfg.extra_sources],
+            ocr_enabled=cfg.ocr_enabled,
+            stt_key=cfg.stt_key,
+            stt_provider=cfg.stt_provider,
+        )
+        results.extend(ing.results)
+        units.extend(ing.units)
+    if cfg.urls:
+        web = ingest_urls(cfg.urls)
+        results.extend(web.results)
+        units.extend(web.units)
+    for r in results:
+        flag = "✓" if r.status == "ok" else "·"
+        note = "" if r.status == "ok" else f" (skipped: {r.reason})"
+        print(f"  {flag} {r.source_type}: {r.origin}{note}")
+
+    extra_context = render_extra_context(units)
+    if not extra_context.strip():
+        print(
+            "oxison: greenfield needs at least one usable input — the brief, "
+            "sources, and URLs were all empty or skipped."
+        )
+        return 4
+
+    # --- comprehend (greenfield, read-only worker) ---
+    print("→ comprehending the brief + sources (read-only worker)...")
+    try:
+        comp = await comprehend(cfg, repo_map, extra_context=extra_context, mode="greenfield")
+    except ComprehensionError as exc:
+        print(f"oxison: {exc}")
+        return 4
+    _write(cfg.output_dir, COMPREHENSION_FILENAME, comp.text)
+    print(f"  comprehension done — ${comp.total_cost_usd:.4f}")
+
+    # --- comprehension.json (correct ledger: brief + sources + web; NO git) ---
+    doc = build_comprehension_doc(
+        comprehension_text=comp.text,
+        source_results=results,
+        generated_at=datetime.now(UTC).isoformat(),
+    )
+    _write(cfg.output_dir, COMPREHENSION_JSON_FILENAME, doc.to_json())
+    print(f"  ✓ {COMPREHENSION_JSON_FILENAME}")
+
+    # --- generate PRODUCT.md only (no MANUAL/STACK — nothing built yet) ---
+    print("→ generating PRODUCT.md (read-only worker)...")
+    try:
+        artifacts = await generate(
+            cfg, comp.text, repo_map, steps=["product"],
+            extra_context=extra_context, mode="greenfield",
+        )
+    except GenerationError as exc:
+        print(f"oxison: artifact generation failed: {exc}")
+        return 5
+    product_cost = sum(a.cost_usd for a in artifacts)
+    for art in artifacts:
+        print(f"  {art.filename} — ${art.cost_usd:.4f}")
+
+    # --- plan: the initial from-scratch roadmap (greenfield framing) ---
+    print("→ planning the initial roadmap (read-only worker, self-correcting gate)...")
+    try:
+        result = await run_plan(
+            cfg,
+            json.loads(doc.to_json()),
+            generated_at=datetime.now(UTC).isoformat(),
+            user_guidance=user_guidance,
+            max_tasks=max_tasks,
+            greenfield=True,
+        )
+    except PlanError as exc:
+        print(f"oxison: planning failed: {exc}")
+        return 5
+    _write(cfg.output_dir, ROADMAP_JSON_FILENAME, result.doc.to_json())
+    _write(cfg.output_dir, ROADMAP_MD_FILENAME, render_roadmap_md(result.doc))
+    note = "" if result.attempts == 1 else f" (after {result.attempts} attempts)"
+    print(f"  ✓ {len(result.doc.tasks)} tasks planned{note} — ${result.cost_usd:.4f}")
+
+    print()
+    print(f"✓ greenfield plan in {cfg.output_dir}")
+    print(f"  ✓ {COMPREHENSION_FILENAME}")
+    print("  ✓ PRODUCT.md")
+    print(f"  ✓ {ROADMAP_MD_FILENAME}")
+    total = comp.total_cost_usd + product_cost + result.cost_usd
+    print(f"  total cost: ${total:.4f}")
+    return 0
+
+
 __all__ = [
     "COMPREHENSION_FILENAME",
     "COMPREHENSION_JSON_FILENAME",
     "REPOMAP_FILENAME",
+    "greenfield_pipeline",
     "run_pipeline",
 ]

@@ -157,6 +157,61 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan_p.set_defaults(func=cmd_plan)
 
+    ideate_p = sub.add_parser(
+        "ideate",
+        help="Oxideia: start from a brief + non-repo inputs (no repo) → "
+             "comprehension + ROADMAP",
+    )
+    ideate_p.add_argument("--brief", default=None, help="the project idea, as text")
+    ideate_p.add_argument(
+        "--brief-file", default=None, help="read the project idea from a text file"
+    )
+    ideate_p.add_argument(
+        "--add", action="append", default=[], metavar="PATH",
+        help="add a non-repo source (PDF/pptx/docx/md/recording); repeatable",
+    )
+    ideate_p.add_argument(
+        "--sources", default=None, metavar="DIR",
+        help="ingest every supported file in a directory (auto-detect)",
+    )
+    ideate_p.add_argument(
+        "--url", action="append", default=[], metavar="URL",
+        help="fetch a website link as a source; repeatable",
+    )
+    ideate_p.add_argument(
+        "--ocr", action="store_true",
+        help="enable scanned-PDF OCR (lazy-imports an optional document_extraction package)",
+    )
+    ideate_p.add_argument(
+        "--stt-key", default=None, help="cloud STT API key (enables recording ingest)",
+    )
+    ideate_p.add_argument(
+        "--stt-provider", default="openai", help="STT provider (default: openai)",
+    )
+    ideate_p.add_argument(
+        "--output-dir", default=None,
+        help="where to write artifacts (default: ./oxison-output)",
+    )
+    ideate_p.add_argument(
+        "--answers-file", default=None,
+        help="optional text file of guidance to refine the roadmap (re-run to iterate)",
+    )
+    ideate_p.add_argument(
+        "--max-tasks", type=int, default=40,
+        help="plan-gate scope fence: reject a roadmap with more tasks (default: 40)",
+    )
+    ideate_p.add_argument(
+        "--bare", action="store_true",
+        help="use --bare auth (ANTHROPIC_API_KEY) instead of your Claude Code login",
+    )
+    ideate_p.add_argument("--api-key", default=None, help="API key for bare mode")
+    ideate_p.add_argument("--model", default=None, help="override the Claude model")
+    ideate_p.add_argument(
+        "--max-budget-usd", type=float, default=None,
+        help="hard dollar cap passed to every claude call",
+    )
+    ideate_p.set_defaults(func=cmd_ideate)
+
     build_p = sub.add_parser(
         "build",
         help="Oxfaz: ingest a roadmap.json and run the autonomous build loop",
@@ -368,6 +423,87 @@ def cmd_plan(args: argparse.Namespace) -> int:
     print()
     print(f"✓ roadmap in {cfg.output_dir}")
     return 0
+
+
+def cmd_ideate(args: argparse.Namespace) -> int:
+    """Oxideia: greenfield — brief + non-repo inputs → comprehension + ROADMAP."""
+    from .config import build_greenfield_config
+    from .pipeline import greenfield_pipeline
+
+    if args.brief and args.brief_file:
+        print("oxison: pass either --brief or --brief-file, not both")
+        return 2
+    brief = args.brief
+    if args.brief_file:
+        bpath = Path(args.brief_file).expanduser()
+        if not bpath.is_file():
+            print(f"oxison: --brief-file not found: {args.brief_file}")
+            return 2
+        brief = bpath.read_text(encoding="utf-8", errors="replace").strip()
+
+    extra = list(args.add)
+    if args.sources:
+        sdir = Path(args.sources).expanduser().resolve()
+        if sdir.is_dir():
+            extra += [str(p) for p in sorted(sdir.iterdir()) if p.is_file()]
+        else:
+            print(f"oxison: --sources: {args.sources!r} is not a directory, skipping")
+
+    if not (brief or extra or args.url):
+        print(
+            "oxison: ideate needs at least one input — pass --brief/--brief-file, "
+            "--add, --sources, or --url"
+        )
+        return 2
+
+    user_guidance = ""
+    if args.answers_file:
+        gpath = Path(args.answers_file).expanduser()
+        if not gpath.is_file():
+            print(f"oxison: --answers-file not found: {args.answers_file}")
+            return 2
+        user_guidance = gpath.read_text(encoding="utf-8", errors="replace")
+
+    try:
+        cfg = build_greenfield_config(
+            output_dir=args.output_dir,
+            bare=args.bare,
+            api_key=args.api_key,
+            model=args.model,
+            max_budget_usd=args.max_budget_usd,
+            brief=brief,
+            urls=list(args.url),
+            extra_sources=extra,
+            ocr_enabled=args.ocr,
+            stt_key=args.stt_key,
+            stt_provider=args.stt_provider,
+        )
+    except ConfigError as exc:
+        print(f"oxison: config error: {exc}")
+        return 2
+
+    try:
+        pre = preflight(cfg)
+    except PreflightError as exc:
+        print(f"oxison: preflight failed: {exc}")
+        return 3
+
+    print(BANNER.format(version=__version__))
+    print()
+    print("  oxideia (greenfield)")
+    print(
+        f"  inputs        : brief={'yes' if brief else 'no'}, "
+        f"sources={len(extra)}, urls={len(args.url)}"
+    )
+    print(f"  output        : {cfg.output_dir}")
+    print(f"  auth mode     : {cfg.auth_mode}")
+    print(f"  model         : {cfg.model or '(claude default)'}")
+    print(f"  claude CLI    : {pre.claude_version}")
+    print()
+
+    return asyncio.run(
+        greenfield_pipeline(cfg, user_guidance=user_guidance, max_tasks=args.max_tasks)
+    )
 
 
 def cmd_build(args: argparse.Namespace) -> int:
