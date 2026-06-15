@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] — 2026-06-15
 
 ### Added
 - **Seamless provider keys — prompt-and-save + `oxison auth`.** The first time you

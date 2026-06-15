@@ -69,7 +69,7 @@ uvx --from git+https://github.com/escotilha/oxison oxison run /path/to/repo
 Pin to a specific release:
 
 ```bash
-pip install "git+https://github.com/escotilha/oxison.git@v0.3.0"
+pip install "git+https://github.com/escotilha/oxison.git@v0.4.0"
 ```
 
 ### From a local clone

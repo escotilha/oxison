@@ -344,7 +344,7 @@ Install straight from this repo — no PyPI needed:
 # zero-install, always-latest (recommended)
 uvx --from git+https://github.com/escotilha/oxison oxison run /path/to/repo
 # pin to a release
-pip install "git+https://github.com/escotilha/oxison.git@v0.3.0"
+pip install "git+https://github.com/escotilha/oxison.git@v0.4.0"
 ```
 
 Or from a local clone:
