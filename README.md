@@ -1,5 +1,10 @@
 # oxison
 
+[![CI](https://github.com/escotilha/oxison/actions/workflows/ci.yml/badge.svg)](https://github.com/escotilha/oxison/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 **Point it at any local repo — it comprehends the code and writes the product docs back.**
 
 `oxison` reads a repository, understands it by driving the
