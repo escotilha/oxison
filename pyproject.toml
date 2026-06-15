@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxi-son"
-version = "0.3.0"
+version = "0.4.0"
 description = "Point it at any repo; it comprehends the code and writes the product docs (PRODUCT / MANUAL / STACK)."
 readme = "README.md"
 license = { text = "MIT" }
