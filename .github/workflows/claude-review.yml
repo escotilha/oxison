@@ -1,0 +1,70 @@
+# Automated focused code review on every PR.
+#
+# A single-pass, CTO-style review (security + correctness + quality) run by the
+# Claude Code GitHub Action on each pull request. The full multi-analyst /cto
+# swarm stays a manual / release-time step — this is the always-on per-PR gate.
+#
+# Security / cost notes:
+#   - Same-repo PRs only (the `if:` guard). GitHub withholds secrets from fork
+#     workflows, so the action can't run for external fork PRs anyway — gating
+#     avoids failed runs and an injection surface.
+#   - No user-controlled text (PR title/body) is interpolated into the prompt;
+#     only the numeric PR number + repo slug. The reviewer reads the diff itself
+#     via the gh tools in --allowedTools.
+#   - Runs on Opus (code-review-always-opus) but single-pass to bound cost;
+#     billed per PR against the ANTHROPIC_API_KEY repo secret.
+#   - Third-party actions pinned to full commit SHAs (OpenSSF).
+
+name: claude-review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+# Cancel a superseded review when new commits land on the same PR.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  review:
+    name: AI code review (focused, Opus)
+    runs-on: ${{ vars.OXISON_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    # Same-repo PRs only — fork PRs don't receive the secret (safe default).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@d5726de019ec4498aa667642bc3a80fca83aa102  # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are oxison's automated code reviewer — a focused, single-pass
+            CTO-style review (the full multi-analyst /cto swarm is run manually for
+            releases). The PR branch is already checked out. Review the diff of
+            PR #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+
+            Use `gh pr diff` and `gh pr view` to read the change. Focus on, in order:
+            1. Security — command/prompt injection, SSRF, path traversal, committed
+               secrets, unsafe subprocess/`shell=True`, anything weakening oxison's
+               safety model (run/plan workers are read-only Read,Glob,Grep; build
+               workers write but are sandbox + worktree + protected-path-grader
+               contained; `--no-sandbox` is an opt-in trusted-repo escape hatch).
+            2. Correctness bugs and broken contracts.
+            3. Maintainability / quality issues that matter.
+
+            Post concise, severity-ranked findings (Critical / High / Medium / Low)
+            with file:line and a concrete fix — inline comments via the inline-comment
+            tool (confirmed: true) and one short top-level summary via `gh pr comment`.
+            If the PR is clean, say so briefly. Do NOT nitpick formatting that ruff
+            and mypy already enforce. Be terse; only flag things worth acting on.
+          claude_args: >-
+            --model opus
+            --allowedTools mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)
