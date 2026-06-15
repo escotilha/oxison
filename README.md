@@ -398,7 +398,7 @@ $ oxison run . --provider grok
   no XAI_API_KEY found for provider 'grok'.
   Paste your grok API key (hidden): ****************
   Save it for next time? [Y/n] y
-  ✓ saved to keychain (…9f2a) — future runs won't ask
+  ✓ saved to keychain — future runs won't ask
 ```
 
 Manage saved keys explicitly with `oxison auth`:

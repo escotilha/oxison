@@ -155,10 +155,10 @@ You don't have to set an env var every session. The first time you run a provide
 | Command | Effect |
 |---|---|
 | `oxison auth set <provider>` | Prompt (hidden) and save a key; or `--api-key <key>` for non-interactive/scripts |
-| `oxison auth status` | Show the active backend and, per provider, whether a key is saved (backend + last-4) or detected in the env. Never prints a key |
+| `oxison auth status` | Show the active backend and, per provider, whether a key is saved or detected in the env. Never echoes any part of a key |
 | `oxison auth rm <provider>` | Delete a saved key from every backend |
 
-Full resolution order per run: `--api-key` > env var > saved key > interactive prompt. The prompt only appears on an interactive terminal — in CI/headless oxison fails fast with a clear "set `XAI_API_KEY`…" message rather than hanging. oxison only ever displays the last 4 characters of a key.
+Full resolution order per run: `--api-key` > env var > saved key > interactive prompt. The prompt only appears on an interactive terminal — in CI/headless oxison fails fast with a clear "set `XAI_API_KEY`…" message rather than hanging. oxison never prints any part of a saved key.
 
 ### Output directory
 

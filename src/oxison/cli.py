@@ -36,7 +36,6 @@ from .credentials import (
     delete_saved_key,
     detect_backend,
     get_saved_key,
-    last4,
     saved_key_status,
     set_saved_key,
 )
@@ -343,7 +342,7 @@ def _prompt_and_maybe_save(prov: Provider) -> str | None:
     if ans in ("", "y", "yes"):
         try:
             backend = set_saved_key(prov.name, key)
-            print(f"  ✓ saved to {backend} (…{last4(key)}) — future runs won't ask")
+            print(f"  ✓ saved to {backend} — future runs won't ask")
         except CredentialError as exc:
             print(f"  ! could not save ({exc}); using the key for this run only")
     return key
@@ -402,7 +401,7 @@ def cmd_auth_set(args: argparse.Namespace) -> int:
     except CredentialError as exc:
         print(f"oxison: {exc}")
         return 1
-    print(f"✓ saved {prov.name} key to {backend} (…{last4(key)})")
+    print(f"✓ saved {prov.name} key to {backend}")
     return 0
 
 
@@ -412,9 +411,11 @@ def cmd_auth_status(_args: argparse.Namespace) -> int:
         prov = resolve_provider(name)
         if prov is None:  # unreachable: provider_names() yields known names
             continue
-        present, backend, l4 = saved_key_status(name)
+        # Deliberately do NOT echo any part of the key (not even the last 4) —
+        # oxison never prints secret-derived data (CodeQL py/clear-text-logging).
+        present, backend, _ = saved_key_status(name)
         env_var = next((v for v in prov.token_envs if os.environ.get(v)), None)
-        saved = f"saved ✓ ({backend}, …{l4})" if present else "not saved"
+        saved = f"saved ✓ ({backend})" if present else "not saved"
         env_note = f"; env {env_var} set" if env_var else ""
         print(f"  {name:6} {saved}{env_note}")
     return 0

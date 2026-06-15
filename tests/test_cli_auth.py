@@ -88,8 +88,9 @@ def test_auth_set_noninteractive(monkeypatch, capsys):
     rc = cli.cmd_auth_set(_args(provider="grok", api_key="xai-abcd"))
     out = capsys.readouterr().out
     assert rc == 0 and saved["grok"] == "xai-abcd"
-    assert "saved grok key to keychain" in out and "abcd" in out
-    assert "xai-abcd" not in out  # full key never printed (only last4)
+    assert "saved grok key to keychain" in out
+    # No part of the key is ever echoed (not the full key, not the last 4).
+    assert "xai-abcd" not in out and "abcd" not in out
 
 
 def test_auth_status_never_leaks_key(monkeypatch, capsys):
@@ -102,8 +103,10 @@ def test_auth_status_never_leaks_key(monkeypatch, capsys):
     rc = cli.cmd_auth_status(_args())
     out = capsys.readouterr().out
     assert rc == 0
-    assert "grok" in out and "wxyz" in out and "saved" in out
+    assert "grok" in out and "saved" in out
     assert "kimi" in out and "not saved" in out
+    # status must NOT echo any part of the key (not even the last 4)
+    assert "wxyz" not in out
 
 
 def test_auth_rm(monkeypatch, capsys):
