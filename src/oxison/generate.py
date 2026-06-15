@@ -19,7 +19,12 @@ from pathlib import Path
 from .config import READ_ONLY_TOOLS, RunConfig
 from .dispatch import invoke
 from .mdutil import strip_preamble
-from .prompts import manual_prompt, product_prompt, stack_prompt
+from .prompts import (
+    greenfield_product_prompt,
+    manual_prompt,
+    product_prompt,
+    stack_prompt,
+)
 from .repomap import RepoMap
 
 #: Per-document wall-clock timeout (seconds).
@@ -52,7 +57,14 @@ def _prompt_for(
     comprehension: str,
     repo_map_context: str,
     extra_context: str = "",
+    mode: str = "repo",
 ) -> str:
+    if mode == "greenfield":
+        # Greenfield generates only PRODUCT (no MANUAL/STACK — nothing built yet)
+        # and omits the repo map.
+        return greenfield_product_prompt(
+            comprehension=comprehension, extra_context=extra_context
+        )
     builders = {
         "product": product_prompt,
         "manual": manual_prompt,
@@ -73,6 +85,7 @@ async def _generate_one(
     comprehension: str,
     repo_map: RepoMap,
     extra_context: str = "",
+    mode: str = "repo",
 ) -> tuple[str, str, float]:
     """Produce one artifact's markdown via a read-only worker.
 
@@ -85,6 +98,7 @@ async def _generate_one(
         comprehension=comprehension,
         repo_map_context=repo_map.to_context(),
         extra_context=extra_context,
+        mode=mode,
     )
     result = await invoke(
         prompt,
@@ -115,11 +129,13 @@ async def generate(
     *,
     steps: list[str] | None = None,
     extra_context: str = "",
+    mode: str = "repo",
 ) -> list[GeneratedArtifact]:
     """Generate the requested artifacts concurrently; oxison writes them.
 
     ``steps`` defaults to all of product/manual/stack. Used by ``--resume``
-    to regenerate only the steps not yet complete.
+    to regenerate only the steps not yet complete. ``mode="greenfield"`` uses
+    the greenfield product prompt (and should be called with ``steps=["product"]``).
     """
     todo = steps if steps is not None else list(ARTIFACTS.keys())
     sem = asyncio.Semaphore(cfg.max_concurrency)
@@ -132,6 +148,7 @@ async def generate(
                 comprehension=comprehension,
                 repo_map=repo_map,
                 extra_context=extra_context,
+                mode=mode,
             )
 
     results = await asyncio.gather(*(bounded(s) for s in todo))

@@ -108,16 +108,86 @@ def synthesis_prompt(
 
 __all__ = [
     "IDENTITY",
+    "GREENFIELD_IDENTITY",
     "single_pass_prompt",
     "slice_prompt",
     "synthesis_prompt",
+    "greenfield_comprehension_prompt",
     "product_prompt",
+    "greenfield_product_prompt",
     "manual_prompt",
     "stack_prompt",
     "roadmap_analysis_prompt",
     "security_prompt",
     "roadmap_plan_prompt",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Greenfield (Oxideia) — start from a brief + non-repo sources, NO codebase.
+# These mirror the repo prompts but omit the repository map and reframe the
+# task as "the product to be BUILT" rather than "what the code does".
+# ---------------------------------------------------------------------------
+
+GREENFIELD_IDENTITY = (
+    "You are oxison's product analyst working in GREENFIELD mode.\n"
+    "\n"
+    "There is NO existing codebase. You are working purely from a written brief\n"
+    "and the supporting source materials provided below (decks, documents,\n"
+    "recordings, fetched web pages). Reason ONLY from that provided context.\n"
+    "\n"
+    "HARD CONSTRAINTS:\n"
+    "- Do NOT attempt to read files, glob, or grep — there is no repository to\n"
+    "  inspect; everything you have is in the context below.\n"
+    "- Your job is to THINK and RETURN markdown text. oxison writes the files\n"
+    "  itself — you never write output anywhere.\n"
+    "- Describe the product to be BUILT. Never claim anything is already\n"
+    "  implemented or 'built' — nothing exists yet.\n"
+)
+
+
+def greenfield_comprehension_prompt(*, extra_context: str = "") -> str:
+    """Synthesize a brief + non-repo sources into a product understanding."""
+    return (
+        f"{GREENFIELD_IDENTITY}\n"
+        "Synthesize the brief and supporting sources below into a clear,\n"
+        "structured understanding of the PROPOSED product (nothing is built yet)."
+        f"{_extra_block(extra_context)}"
+        "\n"
+        "Cover:\n"
+        "1. What the product is meant to be (the vision, in a few sentences).\n"
+        "2. The problem it solves and who it is for (target users).\n"
+        "3. Core capabilities implied by the brief and sources.\n"
+        "4. Scope and explicit non-goals, where the inputs suggest them.\n"
+        "5. Constraints and assumptions (tech, platform, integrations) if stated.\n"
+        "6. Open questions — gaps the brief leaves that a builder would need "
+        "resolved.\n\n"
+        "Cite sources by their locator (e.g. brief:idea, web:host, "
+        "pptx:deck.pptx#slide-4). Be concrete; do not invent requirements the "
+        "inputs don't support. Return your understanding as structured markdown."
+    )
+
+
+def greenfield_product_prompt(*, comprehension: str, extra_context: str = "") -> str:
+    """PRODUCT.md for a product to be built (no existing code)."""
+    return (
+        f"{GREENFIELD_IDENTITY}\n"
+        "Using the comprehension and sources below, write a PRODUCT document for "
+        "the product to be built — a product vision/spec a stakeholder reads "
+        "first.\n\n"
+        f"=== COMPREHENSION ===\n{comprehension}\n=== END COMPREHENSION ===\n"
+        f"{_extra_block(extra_context)}"
+        "\n"
+        "Cover, with clear markdown sections:\n"
+        "- Overview: what the product is, in two or three sentences.\n"
+        "- Problem it solves and who it is for (target users / use cases).\n"
+        "- Proposed core features and capabilities.\n"
+        "- The intended user-facing mental model / UX.\n"
+        "- Explicit non-goals and key assumptions.\n\n"
+        "Frame everything as the product to BUILD, not as existing software. Do "
+        "not invent requirements the inputs don't support; note open questions. "
+        f"{_RETURN_BODY}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +418,7 @@ def roadmap_plan_prompt(
     open_questions: str,
     user_guidance: str = "",
     prior_errors: str = "",
+    greenfield: bool = False,
 ) -> str:
     """Build the Oxipensa planner prompt.
 
@@ -356,7 +427,22 @@ def roadmap_plan_prompt(
     ``user_guidance`` carries optional human input (the "solicit input" path).
     ``prior_errors`` is set on the self-correction retry — the plan-gate's
     violations from the previous attempt, fed back so the planner fixes them.
+    ``greenfield`` reframes the plan as an initial from-scratch build (no code
+    exists yet) rather than closing the gap on an existing codebase.
     """
+    greenfield_block = (
+        "\n=== GREENFIELD BUILD (from scratch) ===\n"
+        "NOTHING exists yet — there is no codebase. Produce the INITIAL build "
+        "plan to create this product from zero. Sequence foundational scaffolding "
+        "first (project setup, core data model, primary user flow), then "
+        "features. Every task is greenfield; depends_on must express real build "
+        "order, and acceptance criteria must be observable even for foundational "
+        'tasks (e.g. "the project builds and the dev server serves the landing '
+        'page").\n'
+        "=== END GREENFIELD BUILD ===\n"
+        if greenfield
+        else ""
+    )
     guidance_block = (
         f"\n=== USER GUIDANCE (incorporate this) ===\n{user_guidance}\n"
         "=== END USER GUIDANCE ===\n"
@@ -371,7 +457,8 @@ def roadmap_plan_prompt(
     )
     return (
         f"{_PLANNER_IDENTITY}\n"
-        f"Project: {product_name or '(unnamed)'}\n\n"
+        f"Project: {product_name or '(unnamed)'}\n"
+        f"{greenfield_block}\n"
         "Below is the structured comprehension produced by Oxicome — a unified,\n"
         "provenance-tagged understanding of the project across all its sources.\n\n"
         f"=== STRUCTURED STATE (product / state / stack, JSON) ===\n"

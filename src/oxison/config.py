@@ -56,6 +56,10 @@ class RunConfig:
     ocr_enabled: bool = False
     stt_key: str | None = None
     stt_provider: str = "openai"
+    #: Greenfield (ideate) mode only: user-provided website links to fetch, and
+    #: the plain-text project brief. Empty/None for the repo-based run/plan flows.
+    urls: list[str] = field(default_factory=list)
+    brief: str | None = None
 
 
 def resolve_target(raw: str) -> Path:
@@ -70,6 +74,20 @@ def resolve_target(raw: str) -> Path:
     if not path.is_dir():
         raise ConfigError(f"target path is not a directory: {path}")
     return path
+
+
+def resolve_staging(output_dir: Path) -> Path:
+    """Create and return an empty staging dir to use as the worker ``cwd`` in
+    greenfield mode (there is no repo).
+
+    Workers are launched read-only (``READ_ONLY_TOOLS``), so an existing empty
+    directory grants no write capability — it only gives ``claude -p`` a valid
+    ``cwd`` to resolve Read/Glob/Grep against (which find nothing, as intended;
+    the greenfield prompts tell the worker to reason from context, not files).
+    """
+    staging = (output_dir / ".oxison-staging").resolve()
+    staging.mkdir(parents=True, exist_ok=True)
+    return staging
 
 
 def resolve_api_key(explicit: str | None, env: dict[str, str] | None = None) -> str | None:
@@ -148,6 +166,60 @@ def build_run_config(
     )
 
 
+def build_greenfield_config(
+    *,
+    output_dir: str | None,
+    bare: bool,
+    api_key: str | None,
+    model: str | None,
+    max_budget_usd: float | None,
+    brief: str | None,
+    urls: list[str] | None = None,
+    extra_sources: list[str] | None = None,
+    ocr_enabled: bool = False,
+    stt_key: str | None = None,
+    stt_provider: str = "openai",
+    env: dict[str, str] | None = None,
+) -> RunConfig:
+    """Assemble a ``RunConfig`` for greenfield (ideate) mode — no repo target.
+
+    Mirrors ``build_run_config`` but resolves an empty *staging* dir as the
+    worker ``cwd`` instead of an existing repo, and carries the brief + URLs.
+    Always single-pass, single-worker, no resume.
+    """
+    resolved_key = resolve_api_key(api_key, env=env)
+    auth_mode = resolve_auth_mode(bare=bare, api_key=resolved_key)
+    if auth_mode == "bare" and not resolved_key:
+        raise ConfigError(
+            "bare mode requires an API key — set OXISON_API_KEY or "
+            "ANTHROPIC_API_KEY, or drop --bare to use your Claude Code login."
+        )
+    out = (
+        Path(output_dir).expanduser().resolve()
+        if output_dir
+        else Path.cwd() / DEFAULT_OUTPUT_DIRNAME
+    )
+    staging = resolve_staging(out)
+    return RunConfig(
+        target=staging,
+        output_dir=out,
+        auth_mode=auth_mode,
+        api_key=resolved_key if auth_mode == "bare" else None,
+        model=model,
+        max_budget_usd=max_budget_usd,
+        chunk_threshold=DEFAULT_CHUNK_THRESHOLD,
+        max_concurrency=1,
+        resume=False,
+        target_is_git=False,
+        extra_sources=list(extra_sources or []),
+        ocr_enabled=ocr_enabled,
+        stt_key=stt_key,
+        stt_provider=stt_provider,
+        urls=list(urls or []),
+        brief=brief,
+    )
+
+
 __all__ = [
     "DEFAULT_CHUNK_THRESHOLD",
     "DEFAULT_OUTPUT_DIRNAME",
@@ -155,8 +227,10 @@ __all__ = [
     "AuthMode",
     "ConfigError",
     "RunConfig",
+    "build_greenfield_config",
     "build_run_config",
     "resolve_api_key",
     "resolve_auth_mode",
+    "resolve_staging",
     "resolve_target",
 ]
