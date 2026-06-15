@@ -6,6 +6,7 @@ import pytest
 
 from oxison.engine.dispatch import DispatchOutcome
 from oxison.engine.gates import GradeVerdict
+from oxison.engine.integrate import MergeOutcome
 from oxison.engine.loop import (
     HALT_BUDGET,
     HALT_COMPLETE,
@@ -14,7 +15,7 @@ from oxison.engine.loop import (
     LoopOptions,
     run_build_loop,
 )
-from oxison.engine.taskstore import STATUS_MERGED, TaskStore
+from oxison.engine.taskstore import STATUS_FAILED, STATUS_MERGED, TaskStore
 
 
 def _store_with(tmp_path, n):
@@ -286,3 +287,65 @@ async def test_dispatcher_exception_is_adapter_failure(tmp_path):
                          dispatcher=disp)
     assert summary.halt_reason == HALT_NO_PROGRESS
     assert summary.merged == 0
+
+
+# --- Sequential integration (injected integrator) ---------------------------
+
+
+async def _merge_ok(_task, _outcome):
+    return MergeOutcome(ok=True, reason="fast-forward")
+
+
+async def _merge_conflict(_task, _outcome):
+    return MergeOutcome(ok=False, reason="non-fast-forward merge refused")
+
+
+@pytest.mark.asyncio
+async def test_integrator_success_marks_merged_and_integrated(tmp_path):
+    s = _store_with(tmp_path, 2)
+
+    async def disp(task, branch):
+        return _ok_outcome(branch)
+
+    summary = await run_build_loop(
+        s, options=LoopOptions(max_workers=1), dispatcher=disp, grader=_grader_ok,
+        now_fn=_now, now_epoch_fn=lambda: 0.0, integrator=_merge_ok,
+    )
+    assert summary.halt_reason == HALT_COMPLETE
+    assert summary.merged == 2
+    assert summary.integrated == 2
+
+
+@pytest.mark.asyncio
+async def test_integrator_conflict_fails_task_with_integration_class(tmp_path):
+    s = _store_with(tmp_path, 1)
+
+    async def disp(task, branch):
+        return _ok_outcome(branch)
+
+    summary = await run_build_loop(
+        s, options=LoopOptions(max_workers=1, max_ticks=10), dispatcher=disp,
+        grader=_grader_ok, now_fn=_now, now_epoch_fn=lambda: 0.0,
+        integrator=_merge_conflict,
+    )
+    assert summary.integrated == 0
+    assert summary.failed == 1
+    t = s.get_task("oxpz-0")
+    assert t is not None
+    assert t.status == STATUS_FAILED
+    assert t.failure_class == "integration"
+
+
+@pytest.mark.asyncio
+async def test_no_integrator_is_db_only_merge(tmp_path):
+    # Back-compat: without an integrator, an accepted task is marked merged in the
+    # DB only and `integrated` stays 0 (the per-branch human-merge-boundary mode).
+    s = _store_with(tmp_path, 1)
+
+    async def disp(task, branch):
+        return _ok_outcome(branch)
+
+    summary = await _run(s, options=LoopOptions(max_workers=1), dispatcher=disp)
+    assert summary.merged == 1
+    assert summary.integrated == 0
+    assert s.status_counts().get(STATUS_MERGED) == 1

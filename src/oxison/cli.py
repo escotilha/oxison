@@ -245,6 +245,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="sandbox when enabled: srt (Layer 1 host allowlist, default) or "
                               "container (Layer 2 rootless container — needs a runtime + the "
                               "worker image + an API key)")
+    build_p.add_argument("--integrate", action="store_true",
+                         help="merge each graded branch into the repo's current branch "
+                              "as it passes — composes the roadmap into ONE product on "
+                              "main (forces --max-workers 1). Default: per-branch, no merge.")
     build_p.add_argument("--bare", action="store_true",
                          help="use --bare auth (ANTHROPIC_API_KEY) instead of your login")
     build_p.add_argument("--api-key", default=None, help="API key for bare mode")
@@ -531,6 +535,32 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"oxison: {exc}")
         return 2
 
+    # --integrate composes the roadmap into one product on main: each graded
+    # branch is git-merged as it passes. It requires sequential dispatch (so each
+    # task branches from the accumulated main), so it forces --max-workers 1.
+    integrator = None
+    if args.integrate:
+        import subprocess
+
+        from .engine.integrate import make_integrator
+
+        dirty = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            capture_output=True, text=True, check=False,
+        )
+        if dirty.returncode == 0 and dirty.stdout.strip():
+            print(
+                "oxison: --integrate needs a clean working tree on the repo's main "
+                "branch (uncommitted changes would block the fast-forward merge).\n"
+                "  commit or stash them, then re-run."
+            )
+            return 2
+        if args.max_workers != 1:
+            print(f"  note: --integrate forces --max-workers 1 (was {args.max_workers}); "
+                  "parallel integration is not yet supported.")
+        args.max_workers = 1
+        integrator = make_integrator(repo)
+
     store = TaskStore.open(repo)
     ingest = ingest_roadmap(store, roadmap)
 
@@ -639,18 +669,25 @@ def cmd_build(args: argparse.Namespace) -> int:
     else:
         sandbox_status = "srt (Layer 1, filesystem + egress confined)"
     print(f"  sandbox       : {sandbox_status}")
+    if integrator is not None:
+        print("  integrate     : ON — each graded branch is merged into "
+              f"{repo.name}'s current branch (main accumulates)")
     print("\n→ BUILD MODE — workers WRITE code in isolated worktrees under "
           "oxison-build/worktrees/\n")
 
     summary = asyncio.run(
         run_build_loop(store, options=options, dispatcher=dispatcher,
-                       grader=grader, now_fn=_now_iso, now_epoch_fn=time.time)
+                       grader=grader, now_fn=_now_iso, now_epoch_fn=time.time,
+                       integrator=integrator)
     )
 
     print(f"\n✓ build loop halted: {summary.halt_reason}")
     print(f"  ticks={summary.ticks} dispatched={summary.dispatched} "
-          f"merged={summary.merged} failed={summary.failed} spent=${summary.spent_usd:.4f}")
+          f"merged={summary.merged} failed={summary.failed} "
+          f"integrated={summary.integrated} spent=${summary.spent_usd:.4f}")
     print(f"  taskstore: {store.status_counts()}")
+    if integrator is not None and summary.integrated:
+        print(f"  ✓ main now holds {summary.integrated} integrated task(s)")
     return 0
 
 
