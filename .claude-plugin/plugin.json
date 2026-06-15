@@ -1,0 +1,12 @@
+{
+  "name": "oxison",
+  "description": "Document any repo from inside Claude Code. Drives the read-only oxison CLI to comprehend the code and write product docs (PRODUCT/MANUAL/STACK + a roadmap or security-notes branch). Never modifies the target repo.",
+  "author": {
+    "name": "escotilha",
+    "url": "https://github.com/escotilha"
+  },
+  "homepage": "https://github.com/escotilha/oxison",
+  "repository": "https://github.com/escotilha/oxison",
+  "license": "MIT",
+  "keywords": ["claude-code", "documentation", "code-comprehension", "cli", "ai"]
+}

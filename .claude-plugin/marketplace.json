@@ -1,0 +1,17 @@
+{
+  "name": "oxison",
+  "owner": {
+    "name": "escotilha"
+  },
+  "description": "Single-plugin marketplace for oxison — document any repo from inside Claude Code.",
+  "plugins": [
+    {
+      "name": "oxison",
+      "source": "./",
+      "description": "Document any repo from inside Claude Code: /oxison <repo> drives the read-only oxison CLI to comprehend the code and write PRODUCT/MANUAL/STACK docs (plus a roadmap or security-notes branch). Never modifies the target repo.",
+      "homepage": "https://github.com/escotilha/oxison",
+      "license": "MIT",
+      "keywords": ["claude-code", "documentation", "code-comprehension", "cli", "ai"]
+    }
+  ]
+}
