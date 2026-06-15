@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- **Build-worker prompt-injection hardening (#13).** Untrusted task fields
+  (roadmap/web-derived) are now enclosed in a `<task_data>` fence labelled
+  data-not-instructions, with the oxison Rules as the worker's only authority;
+  and worker logs are redacted of any literal credential (`api_key` / provider
+  token) before they persist (CWE-532), so a prompt-injected worker can't surface
+  a key via `env` into its log. Defence in depth on top of the sandbox.
+
 ## [0.4.0] — 2026-06-15
 
 ### Added
