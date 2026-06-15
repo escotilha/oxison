@@ -5,7 +5,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-**Reads any repo and writes its product docs (PRODUCT/MANUAL/STACK), plans a roadmap, and builds the work — powered by Claude Code. Read-only by default, sandboxed when it writes.**
+**Point it at a repo — or start from just an idea — and it writes the product docs (PRODUCT/MANUAL/STACK), plans a roadmap, and builds the work. Runs on Claude, Kimi, or Grok. Read-only by default, sandboxed when it writes.**
 
 `oxison` reads a repository, understands it by driving the
 [Claude Code](https://claude.com/claude-code) CLI as a **read-only**
