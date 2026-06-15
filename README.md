@@ -379,13 +379,39 @@ oxison run /path/to/repo --provider grok --model grok-build-0.1   # agentic-buil
 ```
 
 `--provider` works on every command — `run`, `plan`, `ideate`, and `build`. It
-reads the provider key from the env var shown (or `--api-key`), points the
-worker at the provider's endpoint via `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`,
-and defaults the model to the provider's (override with `--model`). oxison never
-reads `ANTHROPIC_*` from your ambient environment — the provider overlay is
-constructed only from your explicit `--provider` choice, so it can't silently
-override a normal Anthropic run. For sandboxed `oxison build`, the provider's API
-host is added to the worker egress allowlist automatically.
+points the worker at the provider's endpoint via `ANTHROPIC_BASE_URL` +
+`ANTHROPIC_AUTH_TOKEN` and defaults the model to the provider's (override with
+`--model`). oxison never reads `ANTHROPIC_*` from your ambient environment — the
+provider overlay is constructed only from your explicit `--provider` choice, so it
+can't silently override a normal Anthropic run. For sandboxed `oxison build`, the
+provider's API host is added to the worker egress allowlist automatically.
+
+### The key, once
+
+You don't have to re-export a key every session. The **first** time you run a
+provider with no key, oxison prompts for it (hidden input) and offers to save it —
+to your **OS keychain** (macOS Keychain / Linux `secret-tool`), falling back to a
+`0600` file at `~/.config/oxison/credentials`. Every run after that is zero-touch:
+
+```text
+$ oxison run . --provider grok
+  no XAI_API_KEY found for provider 'grok'.
+  Paste your grok API key (hidden): ****************
+  Save it for next time? [Y/n] y
+  ✓ saved to keychain — future runs won't ask
+```
+
+Manage saved keys explicitly with `oxison auth`:
+
+```bash
+oxison auth set grok       # prompts (hidden), or pass --api-key for scripts
+oxison auth status         # which keys are saved / detected (never prints a key)
+oxison auth rm grok        # delete a saved key
+```
+
+Resolution order is `--api-key` > env var > saved key > prompt. The prompt only
+fires on an interactive terminal — in CI/headless it fails fast with a clear "set
+`XAI_API_KEY`…" message instead of hanging.
 
 ## Usage
 
