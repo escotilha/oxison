@@ -356,24 +356,45 @@ oxison opportunistically uses it to add structure to `ROADMAP-ANALYSIS.md`.
 It is **not** a dependency and is not published; the roadmap analysis works
 on any roadmap format via the AI pass regardless of whether it's present.
 
-## Claude Code skill
+## Run it from Claude Code (no terminal needed)
 
-This repo ships a [Claude Code](https://claude.com/claude-code) skill at
-[`skills/oxison/SKILL.md`](skills/oxison/SKILL.md). Install it once and you can
-run oxison from inside any Claude Code session by typing `/oxison <repo>` (or
-just asking it to "document this repo"):
+oxison ships as a [Claude Code](https://claude.com/claude-code) **plugin**, so
+you can install and run it entirely from inside Claude Code — no shell, no
+`pip`, no `cp`. From any Claude Code session:
+
+```text
+/plugin marketplace add escotilha/oxison    # one time
+/plugin install oxison@oxison               # or pick it from the /plugin menu
+```
+
+Then just point it at a repo:
+
+```text
+/oxison /path/to/repo
+```
+
+…or simply ask **"document this repo"**. The skill resolves the `oxison` CLI
+itself (zero-install via `uvx` if it isn't already on your `PATH` — see
+[Install](#install)), defaults to Sonnet with a per-call budget cap for cost
+safety, runs the read-only pipeline, and verifies the target repo was left
+untouched after every run. Pass `--opus` for oxison's Opus default or
+`--full-budget` to drop the budget cap.
+
+> Updates: leave it on auto-update, or run `/plugin marketplace update oxison`
+> to pull the latest.
+
+<details>
+<summary>Manual install (skill only, without the plugin system)</summary>
+
+The skill lives at [`skills/oxison/SKILL.md`](skills/oxison/SKILL.md). To install
+it directly instead of via the plugin:
 
 ```bash
-# install the skill into your personal Claude Code skills
 mkdir -p ~/.claude/skills
 cp -r skills/oxison ~/.claude/skills/oxison
 ```
 
-The skill assumes the `oxison` CLI is on your `PATH` (see [Install](#install) —
-`uv tool install` or `pipx install` give you a persistent `oxison` command). It
-defaults to Sonnet with a per-call budget cap for cost safety, runs the CLI,
-and verifies the read-only guarantee held after every run. Pass `--opus` to use
-oxison's Opus default or `--full-budget` to drop the budget cap.
+</details>
 
 ## Development
 
