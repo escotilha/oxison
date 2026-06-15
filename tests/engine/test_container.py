@@ -38,6 +38,26 @@ def test_run_argv_mounts_only_the_workspace_and_drops_privilege(tmp_path):
     assert argv[img_i + 1:] == ["claude", "-p", "--bare", "hi"]
 
 
+def test_run_argv_forwards_provider_env_names(tmp_path):
+    ws = tmp_path / "clone"
+    ws.mkdir()
+    argv = build_run_argv(
+        runtime="/usr/bin/podman", image=DEFAULT_WORKER_IMAGE, workspace=ws,
+        inner_argv=["claude", "-p", "--bare", "hi"],
+        extra_env_names=["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    )
+    # Each provider var is forwarded by NAME (value stays in the host env).
+    forwarded = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+    assert "ANTHROPIC_API_KEY" in forwarded  # the default key forward stays
+    assert "ANTHROPIC_BASE_URL" in forwarded
+    assert "ANTHROPIC_AUTH_TOKEN" in forwarded
+    # no literal token value ever lands in argv
+    assert not any("sk-" in a or a.startswith("xai-") for a in argv)
+    # forwards come before the image; inner argv stays after it
+    img_i = argv.index(DEFAULT_WORKER_IMAGE)
+    assert argv[img_i + 1:] == ["claude", "-p", "--bare", "hi"]
+
+
 def test_resolve_runtime_absolute(tmp_path):
     exe = tmp_path / "podman"
     exe.write_text("#!/bin/sh\n")
@@ -99,7 +119,7 @@ async def test_launch_container_requires_api_key(tmp_path):
         api_key=None, model=None, runtime="podman", image="img",
         clone_root=tmp_path / "c", log_path=tmp_path / "l" / "x.log",
     )
-    assert out.adapter_failure and "API key" in (out.error or "")
+    assert out.adapter_failure and "token auth" in (out.error or "")
 
 
 @pytest.mark.asyncio

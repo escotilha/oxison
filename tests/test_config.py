@@ -41,6 +41,58 @@ def test_resolve_target_is_file(tmp_path: Path) -> None:
         resolve_target(str(f))
 
 
+def _provider_cfg(tmp_path: Path, provider: str, *, model=None, api_key=None, env=None):
+    return build_run_config(
+        target=str(tmp_path), output_dir=str(tmp_path / "out"),
+        bare=False, api_key=api_key, model=model, max_budget_usd=None,
+        chunk_threshold=1000, max_concurrency=1, resume=False,
+        provider=provider, env=env or {},
+    )
+
+
+def test_provider_kimi_sets_bare_overlay_and_default_model(tmp_path: Path) -> None:
+    cfg = _provider_cfg(tmp_path, "kimi", env={"KIMI_API_KEY": "moon-key"})
+    assert cfg.provider == "kimi"
+    assert cfg.auth_mode == "bare"
+    # provider auth flows through the overlay, NOT the Anthropic key field
+    assert cfg.api_key is None
+    assert cfg.model == "kimi-k2.7-code"  # provider default
+    overlay = dict(cfg.provider_env)
+    assert overlay["ANTHROPIC_BASE_URL"] == "https://api.moonshot.ai/anthropic"
+    assert overlay["ANTHROPIC_AUTH_TOKEN"] == "moon-key"
+    assert overlay["ENABLE_TOOL_SEARCH"] == "false"
+
+
+def test_provider_grok_explicit_key_and_model_override(tmp_path: Path) -> None:
+    cfg = _provider_cfg(tmp_path, "grok", model="grok-build-0.1", api_key="xai-key")
+    assert cfg.provider == "grok"
+    assert cfg.model == "grok-build-0.1"  # --model wins over the provider default
+    overlay = dict(cfg.provider_env)
+    assert overlay["ANTHROPIC_BASE_URL"] == "https://api.x.ai"
+    assert overlay["ANTHROPIC_AUTH_TOKEN"] == "xai-key"
+
+
+def test_provider_missing_key_raises(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="KIMI_API_KEY"):
+        _provider_cfg(tmp_path, "kimi", env={})
+
+
+def test_provider_unknown_raises(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="unknown provider"):
+        _provider_cfg(tmp_path, "gpt5", env={"ANYKEY": "x"})
+
+
+def test_no_provider_leaves_fields_empty(tmp_path: Path) -> None:
+    cfg = build_run_config(
+        target=str(tmp_path), output_dir=str(tmp_path / "out"),
+        bare=False, api_key=None, model=None, max_budget_usd=None,
+        chunk_threshold=1000, max_concurrency=1, resume=False, env={},
+    )
+    assert cfg.provider is None
+    assert cfg.provider_env == ()
+    assert cfg.auth_mode == "oauth"
+
+
 def test_resolve_api_key_precedence() -> None:
     assert resolve_api_key("explicit", env={"OXISON_API_KEY": "a"}) == "explicit"
     assert resolve_api_key(None, env={"OXISON_API_KEY": "a"}) == "a"

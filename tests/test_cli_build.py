@@ -41,6 +41,21 @@ def test_build_parser():
     assert args.max_ticks == 5 and args.dry_run is True
 
 
+def test_build_parser_accepts_known_provider():
+    args = cli.build_parser().parse_args(
+        ["build", "roadmap.json", "--repo", "r", "--provider", "kimi", "--dry-run"]
+    )
+    assert args.provider == "kimi"
+
+
+def test_build_parser_rejects_unknown_provider():
+    import pytest
+    with pytest.raises(SystemExit):  # argparse choices rejects at parse time
+        cli.build_parser().parse_args(
+            ["build", "roadmap.json", "--repo", "r", "--provider", "gpt5"]
+        )
+
+
 def test_build_dry_run_ingests(tmp_path, capsys):
     repo = _git_repo(tmp_path)
     rm = _write_roadmap(tmp_path)

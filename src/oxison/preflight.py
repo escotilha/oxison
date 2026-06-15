@@ -68,14 +68,15 @@ def preflight(cfg: RunConfig, *, binary: str = "claude") -> PreflightResult:
     """Run all preflight checks for a given run configuration.
 
     - Always: the ``claude`` CLI exists and reports a version.
-    - Bare mode: an API key must be present (already validated in
-      ``build_run_config``; re-checked here defensively).
+    - Bare mode: token auth must be present — either an Anthropic ``api_key`` or
+      a provider overlay (``provider_env`` carries ``ANTHROPIC_AUTH_TOKEN``).
+      Already validated in ``build_run_config``; re-checked here defensively.
     - OAuth mode: we rely on the CLI's own credential store; a live
       auth probe is deferred to the first AI call to avoid spending
       tokens in preflight.
     """
     result = check_claude_cli(binary)
-    if cfg.auth_mode == "bare" and not cfg.api_key:
+    if cfg.auth_mode == "bare" and not cfg.api_key and not cfg.provider_env:
         raise PreflightError(
             "bare mode selected but no API key resolved — set OXISON_API_KEY "
             "or ANTHROPIC_API_KEY, or drop --bare."

@@ -51,3 +51,17 @@ def test_preflight_bare_without_key_defensive(
             lambda binary="claude": None,  # type: ignore[return-value]
         )
         preflight(cfg)
+
+
+def test_preflight_provider_satisfies_bare_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Provider mode is bare (no Anthropic api_key) but auth comes from the
+    # overlay (ANTHROPIC_AUTH_TOKEN in provider_env) — preflight must accept it.
+    cfg = _cfg(tmp_path, provider="grok", env={"XAI_API_KEY": "xai-tok"})
+    assert cfg.auth_mode == "bare" and cfg.api_key is None and cfg.provider_env
+    monkeypatch.setattr(
+        "oxison.preflight.check_claude_cli",
+        lambda binary="claude": None,  # type: ignore[return-value]
+    )
+    preflight(cfg)  # must NOT raise

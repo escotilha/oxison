@@ -124,8 +124,29 @@ Bare mode requires a key to be present. Passing `--bare` without a key produces 
 |---|---|
 | `OXISON_API_KEY` | Primary API key (bare mode) |
 | `ANTHROPIC_API_KEY` | Fallback API key (bare mode) |
+| `KIMI_API_KEY` / `MOONSHOT_API_KEY` | Kimi provider key (`--provider kimi`) |
+| `XAI_API_KEY` / `GROK_API_KEY` | Grok provider key (`--provider grok`) |
 
-No other environment variables are read by oxison itself. The standard shell environment (`PATH`, `HOME`, `USER`, `LANG`, etc.) is passed through to the `claude` subprocess via a whitelist.
+No other environment variables are read by oxison itself. The standard shell environment (`PATH`, `HOME`, `USER`, `LANG`, etc.) is passed through to the `claude` subprocess via a whitelist. Inherited `ANTHROPIC_*` vars are deliberately **stripped** (a secrets boundary); the provider overlay below is the only sanctioned way `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` reach the worker, and oxison constructs it from your explicit `--provider` choice.
+
+### Model providers (Anthropic-compatible)
+
+oxison drives `claude -p`, which speaks the Anthropic Messages API, so any model with an Anthropic-compatible endpoint can run the full pipeline. Select one with `--provider` on any command (`run`, `plan`, `ideate`, `build`):
+
+| Provider | Endpoint | Key (precedence: `--api-key` > envs) | Default model |
+|---|---|---|---|
+| `kimi` | `https://api.moonshot.ai/anthropic` | `KIMI_API_KEY`, `MOONSHOT_API_KEY` | `kimi-k2.7-code` |
+| `grok` | `https://api.x.ai` | `XAI_API_KEY`, `GROK_API_KEY` | `grok-4.3` (also `grok-build-0.1`) |
+
+```bash
+export KIMI_API_KEY=...
+oxison run /path/to/repo --provider kimi
+
+export XAI_API_KEY=...
+oxison run /path/to/repo --provider grok --model grok-build-0.1
+```
+
+Provider mode forces bare-style token auth (it ignores the host OAuth login) and defaults `--model` to the provider's; override with `--model`. For a sandboxed `oxison build`, the provider's API host is auto-added to the worker egress allowlist so the sandboxed worker can reach it.
 
 ### Output directory
 

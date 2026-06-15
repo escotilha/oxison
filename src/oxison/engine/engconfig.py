@@ -151,6 +151,12 @@ class EngineConfig:
     # internal: extra env vars to whitelist into the worker child env
     extra_env_whitelist: tuple[str, ...] = field(default=())
 
+    # internal: provider child-env overlay (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN
+    # + knobs) when `oxison build --provider <name>` is used. Tuple-of-pairs to keep
+    # the frozen dataclass hashable; empty = Anthropic (default) auth. Carried into
+    # both Layer-1 (srt) and Layer-2 (container) worker envs via build_env(extra=…).
+    provider_env: tuple[tuple[str, str], ...] = field(default=())
+
     def __post_init__(self) -> None:
         # C3: the per-worker cap must be a positive number, never None/0.
         # The field is typed ``float``, but a caller can still pass ``None``
