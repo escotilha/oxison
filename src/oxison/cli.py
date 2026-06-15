@@ -411,9 +411,9 @@ def cmd_auth_status(_args: argparse.Namespace) -> int:
         prov = resolve_provider(name)
         if prov is None:  # unreachable: provider_names() yields known names
             continue
-        # Deliberately do NOT echo any part of the key (not even the last 4) —
-        # oxison never prints secret-derived data (CodeQL py/clear-text-logging).
-        present, backend, _ = saved_key_status(name)
+        # saved_key_status carries no key-derived data, so nothing here can echo
+        # any part of the secret (CodeQL py/clear-text-logging).
+        present, backend = saved_key_status(name)
         env_var = next((v for v in prov.token_envs if os.environ.get(v)), None)
         saved = f"saved ✓ ({backend})" if present else "not saved"
         env_note = f"; env {env_var} set" if env_var else ""

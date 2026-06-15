@@ -97,7 +97,7 @@ def test_auth_status_never_leaks_key(monkeypatch, capsys):
     monkeypatch.setattr(cli, "detect_backend", lambda: "keychain")
     monkeypatch.setattr(
         cli, "saved_key_status",
-        lambda name: (True, "keychain", "wxyz") if name == "grok" else (False, None, None),
+        lambda name: (True, "keychain") if name == "grok" else (False, None),
     )
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     rc = cli.cmd_auth_status(_args())

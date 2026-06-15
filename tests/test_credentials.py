@@ -31,8 +31,8 @@ def test_file_roundtrip(file_backend):
     assert cred.get_saved_key("grok") is None
     assert cred.set_saved_key("grok", "xai-secret-1234") == "file"
     assert cred.get_saved_key("grok") == "xai-secret-1234"
-    present, backend, l4 = cred.saved_key_status("grok")
-    assert present and backend == "file" and l4 == "1234"
+    present, backend = cred.saved_key_status("grok")
+    assert present and backend == "file"
     assert cred.delete_saved_key("grok") is True
     assert cred.get_saved_key("grok") is None
     assert cred.delete_saved_key("grok") is False  # idempotent
@@ -46,21 +46,17 @@ def test_file_is_0600_and_dir_0700(file_backend):
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
 
 
-def test_status_exposes_only_last4(file_backend):
+def test_status_carries_no_key_material(file_backend):
     cred.set_saved_key("grok", "xai-supersecret-wxyz")
-    present, backend, l4 = cred.saved_key_status("grok")
-    assert present and l4 == "wxyz"
-    assert "supersecret" not in (l4 or "")
+    status = cred.saved_key_status("grok")
+    assert status == (True, "file")
+    # the status tuple contains no part of the key (not even a last-4)
+    assert not any("supersecret" in str(x) or "wxyz" in str(x) for x in status)
 
 
 def test_set_empty_key_rejected(file_backend):
     with pytest.raises(cred.CredentialError):
         cred.set_saved_key("grok", "   ")
-
-
-def test_last4_short_and_normal():
-    assert cred.last4("ab") == "?"
-    assert cred.last4("abcdef") == "cdef"
 
 
 def test_corrupt_file_is_fail_soft(file_backend):
@@ -96,8 +92,8 @@ def test_keychain_backend_mocked(tmp_path, monkeypatch):
     assert cred.detect_backend() == "keychain"
     assert cred.set_saved_key("grok", "xai-kc-1234") == "keychain"
     assert cred.get_saved_key("grok") == "xai-kc-1234"
-    present, backend, l4 = cred.saved_key_status("grok")
-    assert present and backend == "keychain" and l4 == "1234"
+    present, backend = cred.saved_key_status("grok")
+    assert present and backend == "keychain"
     assert cred.delete_saved_key("grok") is True
     assert cred.get_saved_key("grok") is None
 

@@ -63,11 +63,6 @@ def _config_path() -> Path:
     return Path(base) / "oxison" / "credentials"
 
 
-def last4(key: str) -> str:
-    """Last 4 chars of a key, for non-leaking status display."""
-    return key[-4:] if len(key) >= 4 else "?"
-
-
 # --- macOS Keychain (security) -------------------------------------------------
 
 def _kc_available() -> bool:
@@ -265,20 +260,21 @@ def delete_saved_key(provider: str) -> bool:
     return removed
 
 
-def saved_key_status(provider: str) -> tuple[bool, str | None, str | None]:
-    """``(present, backend, last4)`` for ``provider`` — never returns the key itself."""
-    if _kc_available():
-        key = _kc_get(provider)
-        if key:
-            return True, "keychain", last4(key)
-    if _st_available():
-        key = _st_get(provider)
-        if key:
-            return True, "secret-tool", last4(key)
-    key = _file_get(provider)
-    if key:
-        return True, "file", last4(key)
-    return False, None, None
+def saved_key_status(provider: str) -> tuple[bool, str | None]:
+    """``(present, backend)`` for ``provider``.
+
+    Deliberately carries **no key-derived data** (not even a last-4) — the status
+    path must never return or log secret material, and a tuple that *contained*
+    key-derived data would taint its other elements through CodeQL's dataflow.
+    Presence is checked by a discarded read; the key value never escapes here.
+    """
+    if _kc_available() and _kc_get(provider):
+        return True, "keychain"
+    if _st_available() and _st_get(provider):
+        return True, "secret-tool"
+    if _file_get(provider):
+        return True, "file"
+    return False, None
 
 
 class CredentialError(RuntimeError):
@@ -290,7 +286,6 @@ __all__ = [
     "delete_saved_key",
     "detect_backend",
     "get_saved_key",
-    "last4",
     "saved_key_status",
     "set_saved_key",
 ]
