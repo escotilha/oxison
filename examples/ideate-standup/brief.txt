@@ -1,0 +1,3 @@
+A small CLI that watches a folder of Markdown notes and generates a daily standup
+summary — it extracts open TODO lines and recently-changed files and posts the
+digest to a Slack webhook. Single binary, config via a simple TOML file, runs on a cron.

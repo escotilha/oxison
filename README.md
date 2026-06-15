@@ -210,6 +210,47 @@ oxison's read-only guarantee extends to every source adapter: oxison reads the
 files you point it at and never modifies them. No adapter writes back to any
 input path.
 
+## Start from an idea — `oxison ideate` (greenfield)
+
+You don't need a repo at all. **`oxison ideate`** starts from **zero** — a
+plain-text project idea plus any non-repo inputs (slide decks, recordings,
+PDFs, markdown, and **website links**) — and produces a reviewable plan for a
+product that doesn't exist yet: a comprehension, a `PRODUCT.md` vision/spec, and
+an initial **`ROADMAP`**.
+
+```bash
+# from just an idea
+oxison ideate --brief "a CLI that turns a folder of Markdown notes into a daily Slack standup"
+
+# idea + supporting material (decks, recordings, and links you want it to read)
+oxison ideate \
+  --brief-file ./pitch.md \
+  --add deck.pptx --add call-recording.m4a \
+  --url https://a-competitor.example --url https://some-reference.example
+```
+
+What you get in `./oxison-output/`: `COMPREHENSION.md` + `comprehension.json`
+(the synthesized understanding, provenance-tagged by source — `brief:idea`,
+`web:host`, `pptx:deck#slide-4`), `PRODUCT.md` (the product to build), and
+`ROADMAP.md` / `roadmap.json` (a sequenced, from-scratch build plan whose tasks
+carry observable acceptance criteria — the same gated contract `oxison plan`
+produces, ready for `oxison build`).
+
+It needs **at least one input** (`--brief`/`--brief-file`, `--add`, `--sources`,
+or `--url`). To refine the plan, re-run with `--answers-file notes.txt` (your
+guidance steers the roadmap). See [`examples/ideate-standup/`](examples/ideate-standup/)
+for real output.
+
+**"Research" in v1 means synthesis of what you give it** — including the content
+of the `--url` links it fetches — not open-web search. Fetching a URL is the one
+extra thing greenfield does over the read-only flows: it issues an HTTP GET to
+the links **you** provide (http/https only, with size/time caps). There is no
+model-initiated browsing; the AI workers stay read-only (`Read,Glob,Grep`).
+
+> Greenfield is **plan-only** today — it stops at the roadmap. Scaffolding a repo
+> and running the build loop (`oxison build`) from that roadmap is the documented
+> next step.
+
 ## Planning (Oxipensa)
 
 `comprehension.json` answers *"what is this and where is it at?"*. **Oxipensa**
