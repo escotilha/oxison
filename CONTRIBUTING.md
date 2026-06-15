@@ -37,6 +37,11 @@ CI runs the same three on Python 3.11 and 3.12, plus **gitleaks**, **pip-audit**
    (e.g. `fix(oxfaz): clear stale manifest errors`).
 4. Open a PR against `main` and make sure CI is green.
 
+Every PR also gets an **automated focused code review** (a Claude Code GitHub
+Action runs a single-pass security/correctness/quality pass and posts inline
+findings). It's advisory — address or reply to anything it flags. Deeper audits
+use the manual `/cto` swarm at release time.
+
 ## Safety invariants — do not break these
 
 oxison's core guarantee is that **`oxison run` and `oxison plan` never modify the
