@@ -18,6 +18,7 @@ from .ocr import OcrAdapter
 from .pdf import PdfAdapter
 from .pptx import PptxAdapter
 from .recording import RecordingAdapter
+from .web import WebAdapter
 
 
 @dataclass
@@ -83,6 +84,44 @@ def ingest_paths(
         if not handled:
             out.results.append(
                 SourceResult.skip("unknown", str(path), reason="no adapter for this file type")
+            )
+    return out
+
+
+def brief_unit(text: str) -> SourceUnit:
+    """Wrap a plain-text project brief as a first-class, citable source unit."""
+    return SourceUnit(
+        text=text,
+        source_type="brief",
+        origin_path="(brief)",
+        locator="brief:idea",
+        metadata={},
+    )
+
+
+def ingest_urls(urls: list[str]) -> IngestOutput:
+    """Fetch user-provided URLs via the web adapter, collecting a status ledger.
+
+    Parallel to ``ingest_paths`` but for URLs (not file paths), so it does not
+    touch the path-based adapter dispatch. A fetch error is recorded skipped,
+    never raised — same orchestrator contract as ``ingest_paths``.
+    """
+    out = IngestOutput()
+    if not urls:
+        return out
+    adapter = WebAdapter()
+    avail = adapter.available()
+    for url in urls:
+        if not avail.available:
+            out.results.append(
+                SourceResult.skip("web", url, reason=avail.reason or "unavailable")
+            )
+            continue
+        try:
+            out.results.append(adapter.extract(url))
+        except Exception as exc:  # noqa: BLE001 — orchestrator-boundary net (matches _safe_extract)
+            out.results.append(
+                SourceResult.skip("web", url, reason=f"fetch failed: {type(exc).__name__}: {exc}")
             )
     return out
 
