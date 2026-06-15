@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.2.0] — 2026-06-15
+
+oxison grows from "comprehend a repo and write docs" into a full
+**idea → comprehension → plan → built product** pipeline, and goes public.
+
+### Added
+- **Oxicome — multi-source ingestion.** Comprehend a repo *plus* non-repo
+  sources (PDF, pptx, docx, markdown, audio/video transcripts) merged into one
+  provenance-tagged `comprehension.json` contract.
+- **Oxipensa — the planner.** `oxison plan`: turn a `comprehension.json` into a
+  prioritized, dependency-sequenced `roadmap.json` + `ROADMAP.md`, behind a
+  deterministic self-correcting plan-gate (observable acceptance per task, no
+  protected-path targets).
+- **Oxfaz — the autonomous build engine.** `oxison build`: consume a roadmap and
+  run a graded build loop — one write-worker per task in an isolated git
+  worktree, a crash-safe SQLite taskstore, a protected-path grader on the actual
+  diff, and three guardrails (iteration cap, no-progress halt, budget ceiling).
+- **Two-layer build sandbox** — srt host-allowlist (Layer 1, default) or a
+  rootless container (Layer 2); `--no-sandbox` opt-out for trusted repos.
+- **`oxison build --integrate` — sequential task integration.** Merge each
+  graded branch into the repo's current branch in dependency order, composing a
+  multi-task roadmap into one product on `main`.
+- **Oxideia — greenfield mode (`oxison ideate`).** Start from **zero** — a
+  plain-text idea plus non-repo inputs incl. **website links** — and get a
+  comprehension + `PRODUCT.md` + initial `ROADMAP`, no repo required.
+- **Portable cross-run memory store** for oxison.
+- **Claude Code plugin + marketplace** — install/run from inside Claude Code
+  (`/plugin marketplace add escotilha/oxison` → `/oxison`).
+- **CI** — automated per-PR Opus code review (Claude Code GitHub Action), plus
+  ruff/mypy/pytest, gitleaks, pip-audit, bandit, and CodeQL gates.
+
+### Security
+- **SSRF guard on the URL adapter** — scheme + private/loopback/link-local IP
+  block on the initial URL and every redirect hop (fail-closed).
+- Bounded worker SIGKILL teardown (no event-loop hang); git-failure routing
+  through adapter-failure; direct test corpus for the protected-path gate.
+
+### Changed
+- First **public** release; history scrubbed of internal references.
+
 ## [0.1.0] — 2026-06-06
 
 First working release. Point oxison at a local repo; it comprehends the
