@@ -363,6 +363,30 @@ By default oxison uses your existing Claude Code login (OAuth) — nothing
 to configure. For CI, use `--bare` with `OXISON_API_KEY` or
 `ANTHROPIC_API_KEY`.
 
+## Model providers (Kimi, Grok)
+
+oxison drives `claude -p`, which speaks the Anthropic Messages API — so any
+model with an **Anthropic-compatible endpoint** can run the whole pipeline.
+Two are built in via `--provider`:
+
+```bash
+export KIMI_API_KEY=...        # or MOONSHOT_API_KEY
+oxison run /path/to/repo --provider kimi      # Kimi K2 (default model: kimi-k2.7-code)
+
+export XAI_API_KEY=...          # or GROK_API_KEY
+oxison run /path/to/repo --provider grok      # Grok (default model: grok-4.3)
+oxison run /path/to/repo --provider grok --model grok-build-0.1   # agentic-build model
+```
+
+`--provider` works on every command — `run`, `plan`, `ideate`, and `build`. It
+reads the provider key from the env var shown (or `--api-key`), points the
+worker at the provider's endpoint via `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`,
+and defaults the model to the provider's (override with `--model`). oxison never
+reads `ANTHROPIC_*` from your ambient environment — the provider overlay is
+constructed only from your explicit `--provider` choice, so it can't silently
+override a normal Anthropic run. For sandboxed `oxison build`, the provider's API
+host is added to the worker egress allowlist automatically.
+
 ## Usage
 
 ```bash

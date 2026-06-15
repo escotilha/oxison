@@ -127,6 +127,36 @@ def test_build_env_strips_credential_vars(monkeypatch) -> None:
     env = build_env(api_key=None)  # oauth — nothing injected
     for k in creds:
         assert k not in env
+
+
+def test_build_env_extra_overlay_applied() -> None:
+    # Provider mode: the constructed overlay routes claude at a custom endpoint
+    # via ANTHROPIC_AUTH_TOKEN, and no Anthropic key is injected.
+    env = build_env(
+        api_key=None,
+        extra={"ANTHROPIC_BASE_URL": "https://api.x.ai", "ANTHROPIC_AUTH_TOKEN": "tok"},
+    )
+    assert env["ANTHROPIC_BASE_URL"] == "https://api.x.ai"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "tok"
+    assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_build_env_empty_overlay_is_back_compat() -> None:
+    base = build_env(api_key=None)
+    assert build_env(api_key=None, extra={}) == base
+    assert build_env(api_key=None, extra=None) == base
+
+
+def test_build_env_overlay_overrides_stripped_inherited(monkeypatch) -> None:
+    # The whitelist strips an inherited ANTHROPIC_BASE_URL (secrets boundary);
+    # the explicit overlay is what sets it — proving passthrough never happens.
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://inherited.example")
+    env = build_env(api_key=None)
+    assert "ANTHROPIC_BASE_URL" not in env  # stripped, not passed through
+    env2 = build_env(
+        api_key=None, extra={"ANTHROPIC_BASE_URL": "https://api.moonshot.ai/anthropic"}
+    )
+    assert env2["ANTHROPIC_BASE_URL"] == "https://api.moonshot.ai/anthropic"
     # nothing credential-shaped survives the whitelist
     assert not any(
         marker in key.upper()

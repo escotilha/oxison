@@ -31,6 +31,7 @@ from .config import (
 )
 from .manifest import RunManifest
 from .preflight import PreflightError, preflight
+from .providers import provider_names, resolve_provider
 
 BANNER = r"""
    ____  _  _  ____  ___   __  __ _
@@ -70,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_p.add_argument("--api-key", default=None, help="API key for bare mode")
     run_p.add_argument("--model", default=None, help="override the Claude model")
+    run_p.add_argument(
+        "--provider", default=None, choices=provider_names(),
+        help="run via a non-Anthropic provider (Anthropic-compatible endpoint): "
+             "%(choices)s. Reads the provider key from its env var or --api-key; "
+             "defaults the model to the provider's, override with --model.",
+    )
     run_p.add_argument(
         "--max-budget-usd",
         type=float,
@@ -150,6 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
     plan_p.add_argument("--api-key", default=None, help="API key for bare mode")
     plan_p.add_argument("--model", default=None, help="override the Claude model")
     plan_p.add_argument(
+        "--provider", default=None, choices=provider_names(),
+        help="run via a non-Anthropic provider (Anthropic-compatible endpoint): "
+             "%(choices)s. Reads the provider key from its env var or --api-key; "
+             "defaults the model to the provider's, override with --model.",
+    )
+    plan_p.add_argument(
         "--max-budget-usd",
         type=float,
         default=None,
@@ -207,6 +220,12 @@ def build_parser() -> argparse.ArgumentParser:
     ideate_p.add_argument("--api-key", default=None, help="API key for bare mode")
     ideate_p.add_argument("--model", default=None, help="override the Claude model")
     ideate_p.add_argument(
+        "--provider", default=None, choices=provider_names(),
+        help="run via a non-Anthropic provider (Anthropic-compatible endpoint): "
+             "%(choices)s. Reads the provider key from its env var or --api-key; "
+             "defaults the model to the provider's, override with --model.",
+    )
+    ideate_p.add_argument(
         "--max-budget-usd", type=float, default=None,
         help="hard dollar cap passed to every claude call",
     )
@@ -253,6 +272,13 @@ def build_parser() -> argparse.ArgumentParser:
                          help="use --bare auth (ANTHROPIC_API_KEY) instead of your login")
     build_p.add_argument("--api-key", default=None, help="API key for bare mode")
     build_p.add_argument("--model", default=None, help="override the Claude model")
+    build_p.add_argument(
+        "--provider", default=None, choices=provider_names(),
+        help="build via a non-Anthropic provider (Anthropic-compatible endpoint): "
+             "%(choices)s. Reads the provider key from its env var or --api-key; "
+             "defaults the model to the provider's, override with --model. "
+             "Sandboxed build workers auto-allow the provider's API host.",
+    )
     build_p.set_defaults(func=cmd_build)
 
     ver_p = sub.add_parser("version", help="print version + banner")
@@ -272,6 +298,8 @@ def _print_plan_summary(cfg: RunConfig, manifest: RunManifest, claude_version: s
     print(f"  target        : {cfg.target}")
     print(f"  output        : {cfg.output_dir}")
     print(f"  auth mode     : {cfg.auth_mode}")
+    if cfg.provider:
+        print(f"  provider      : {cfg.provider}")
     print(f"  model         : {cfg.model or '(claude default)'}")
     budget = f"${cfg.max_budget_usd:.2f}" if cfg.max_budget_usd else "(none)"
     print(f"  budget cap    : {budget}")
@@ -302,6 +330,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             chunk_threshold=args.chunk_threshold,
             max_concurrency=args.max_concurrency,
             resume=args.resume,
+            provider=args.provider,
             extra_sources=extra,
             ocr_enabled=args.ocr,
             stt_key=args.stt_key,
@@ -372,6 +401,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
             chunk_threshold=DEFAULT_CHUNK_THRESHOLD,
             max_concurrency=1,
             resume=False,
+            provider=args.provider,
         )
     except (ConfigError, PlanError) as exc:
         print(f"oxison: {exc}")
@@ -389,6 +419,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
     print(f"  comprehension : {comp_arg}")
     print(f"  ground repo   : {args.repo or '(none — plan from comprehension)'}")
     print(f"  output        : {cfg.output_dir}")
+    if cfg.provider:
+        print(f"  provider      : {cfg.provider}")
     print(f"  model         : {cfg.model or '(claude default)'}")
     print(f"  claude CLI    : {pre.claude_version}")
     print()
@@ -477,6 +509,7 @@ def cmd_ideate(args: argparse.Namespace) -> int:
             max_budget_usd=args.max_budget_usd,
             brief=brief,
             urls=list(args.url),
+            provider=args.provider,
             extra_sources=extra,
             ocr_enabled=args.ocr,
             stt_key=args.stt_key,
@@ -501,6 +534,8 @@ def cmd_ideate(args: argparse.Namespace) -> int:
     )
     print(f"  output        : {cfg.output_dir}")
     print(f"  auth mode     : {cfg.auth_mode}")
+    if cfg.provider:
+        print(f"  provider      : {cfg.provider}")
     print(f"  model         : {cfg.model or '(claude default)'}")
     print(f"  claude CLI    : {pre.claude_version}")
     print()
@@ -587,7 +622,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             bare=args.bare, api_key=args.api_key, model=args.model,
             max_budget_usd=args.worker_budget_usd,
             chunk_threshold=DEFAULT_CHUNK_THRESHOLD, max_concurrency=args.max_workers,
-            resume=False,
+            resume=False, provider=args.provider,
         )
     except ConfigError as exc:
         print(f"oxison: config error: {exc}")
@@ -598,10 +633,21 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"oxison: preflight failed: {exc}")
         return 3
 
+    # Provider mode: carry the auth overlay into the worker env, and widen the
+    # sandbox egress allowlist so a sandboxed worker can reach the provider's
+    # API host (otherwise Layer-1 srt blocks it and the build fails by default).
+    prov = resolve_provider(args.provider)
+    sandbox_domains: tuple[str, ...] = ()
+    if prov is not None and prov.sandbox_domains:
+        from .engine.sandbox import DEFAULT_SANDBOX_DOMAINS
+        sandbox_domains = DEFAULT_SANDBOX_DOMAINS + prov.sandbox_domains
+
     engine_config = EngineConfig(
         worker_max_budget_usd=args.worker_budget_usd,
         sandbox_enabled=not args.no_sandbox,
         sandbox_layer=args.sandbox_layer,
+        provider_env=cfg.provider_env,
+        sandbox_allowed_domains=sandbox_domains,
     )
     # Preflight the sandbox: fail BEFORE the loop (not one tick in) if a
     # prerequisite is missing. If disabled, warn loudly on stderr — never silent.
@@ -624,11 +670,12 @@ def cmd_build(args: argparse.Namespace) -> int:
                 "docker/oxfaz-worker"
             )
             return 3
-        if not cfg.api_key:
+        if not cfg.api_key and not cfg.provider_env:
             print(
-                "oxison: container sandbox needs an API key (bare-mode auth — the host "
+                "oxison: container sandbox needs token auth (bare-mode — the host "
                 "Keychain isn't reachable inside the container).\n"
-                "  set ANTHROPIC_API_KEY / OXISON_API_KEY, or pass --api-key."
+                "  set ANTHROPIC_API_KEY / OXISON_API_KEY, pass --api-key, or "
+                "select a provider (e.g. --provider kimi) with its key set."
             )
             return 3
     elif resolve_srt_binary(engine_config.srt_binary) is None:
@@ -662,6 +709,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     )
 
     print(f"  claude CLI    : {pre.claude_version}")
+    if cfg.provider:
+        print(f"  provider      : {cfg.provider} (model: {cfg.model})")
     if not engine_config.sandbox_enabled:
         sandbox_status = "OFF (--no-sandbox)"
     elif engine_config.sandbox_layer == "container":

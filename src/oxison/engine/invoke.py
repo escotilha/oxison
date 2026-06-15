@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from enum import Enum
 
 # Phase 7 note: this is an engine -> Phase-1 import (engine reads Phase-1's
@@ -107,9 +107,19 @@ def build_argv(
     )
 
 
-def build_env(*, api_key: str | None, whitelist: Sequence[str] = ()) -> dict[str, str]:
-    """Compose a whitelisted child env, reusing Phase-1's builder (M2)."""
-    return _p1_build_env(api_key=api_key, whitelist=whitelist)
+def build_env(
+    *,
+    api_key: str | None,
+    whitelist: Sequence[str] = (),
+    extra: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Compose a whitelisted child env, reusing Phase-1's builder (M2).
+
+    ``extra`` forwards the provider overlay (``ANTHROPIC_BASE_URL`` +
+    ``ANTHROPIC_AUTH_TOKEN`` + knobs) to the build worker — see Phase-1's
+    ``build_env`` and ``providers.provider_child_env``.
+    """
+    return _p1_build_env(api_key=api_key, whitelist=whitelist, extra=extra)
 
 
 def kill_process_group(

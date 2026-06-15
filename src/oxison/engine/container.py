@@ -76,6 +76,7 @@ def build_run_argv(
     workspace: Path,
     inner_argv: Sequence[str],
     api_key_env: str = _API_KEY_ENV,
+    extra_env_names: Sequence[str] = (),
     name: str | None = None,
 ) -> list[str]:
     """Build the ``podman run`` argv that runs the worker in the container.
@@ -88,7 +89,11 @@ def build_run_argv(
       is visible. ``--cap-drop ALL`` + ``--security-opt no-new-privileges`` drop
       ambient privilege.
     - ``-e <api_key_env>`` forwards the value from the runtime's own env (the key
-      is referenced by name, never placed in argv).
+      is referenced by name, never placed in argv). ``-e NAME`` with no ``=value``
+      is a no-op when ``NAME`` is unset, so forwarding the Anthropic key name is
+      harmless in provider mode (it is simply absent from the env).
+    - ``extra_env_names`` forwards the provider overlay (``ANTHROPIC_BASE_URL`` +
+      ``ANTHROPIC_AUTH_TOKEN`` + knobs) the same way — by name, values stay in env.
     """
     argv = [runtime, "run", "--rm"]
     if name:
@@ -101,9 +106,10 @@ def build_run_argv(
         "-v", f"{workspace.resolve()}:/work:rw",
         "-w", "/work",
         "-e", api_key_env,
-        image,
-        *inner_argv,
     ]
+    for env_name in extra_env_names:
+        argv += ["-e", env_name]
+    argv += [image, *inner_argv]
     return argv
 
 
@@ -183,18 +189,20 @@ async def launch_worker_container(
     """Run one build worker inside a container; return the outcome.
 
     The worker builds + commits in a self-contained clone (mounted at /work); the
-    host reads the diff from that clone afterwards. ``api_key`` is required —
-    container workers authenticate in bare mode (no host Keychain in the VM).
+    host reads the diff from that clone afterwards. Token auth is required (bare
+    mode — no host Keychain in the VM): either ``api_key`` (Anthropic) or a
+    provider overlay on ``engine_config.provider_env`` (e.g. ``--provider kimi``).
     """
     branch = f"{engine_config.branch_prefix}{task_identifier}"
     clone_dir = clone_root / task_identifier
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if not api_key:
+    if not api_key and not engine_config.provider_env:
         return DispatchOutcome(
             ok=False, branch=branch, worktree_path=str(clone_dir), adapter_failure=True,
-            error="container sandbox requires an API key (bare mode) — set "
-            "ANTHROPIC_API_KEY / OXISON_API_KEY or pass --api-key",
+            error="container sandbox requires token auth (bare mode) — set "
+            "ANTHROPIC_API_KEY / OXISON_API_KEY or pass --api-key, "
+            "or select a provider (e.g. --provider kimi) with its key set",
         )
 
     # macOS: a path only mounts into the podman VM if it's under a shared host
@@ -232,8 +240,13 @@ async def launch_worker_container(
     argv = build_run_argv(
         runtime=runtime, image=image, workspace=clone_dir,
         inner_argv=inner_argv, name=container_name,
+        # In provider mode, forward the overlay var names so the in-VM worker
+        # gets ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN (+ knobs) too.
+        extra_env_names=[k for k, _ in engine_config.provider_env],
     )
-    env = build_env(api_key=api_key)  # puts ANTHROPIC_API_KEY in env for the `-e` forward
+    # api_key -> ANTHROPIC_API_KEY (Anthropic) or None (provider mode); the
+    # provider overlay supplies ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN for `-e`.
+    env = build_env(api_key=api_key, extra=dict(engine_config.provider_env))
 
     timed_out = False
     try:

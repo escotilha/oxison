@@ -14,6 +14,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from .providers import (
+    ProviderError,
+    provider_child_env,
+    resolve_provider,
+    resolve_provider_token,
+)
+
 AuthMode = Literal["oauth", "bare"]
 
 #: Read-only tool set every comprehension/generation worker is limited
@@ -60,6 +67,13 @@ class RunConfig:
     #: the plain-text project brief. Empty/None for the repo-based run/plan flows.
     urls: list[str] = field(default_factory=list)
     brief: str | None = None
+    #: Selected non-Anthropic provider name (e.g. "kimi", "grok") or None for
+    #: Anthropic. Display-only; the auth/routing lives in ``provider_env``.
+    provider: str | None = None
+    #: Provider child-env overlay (ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN +
+    #: knobs) as a tuple-of-pairs (frozen-safe). Empty = Anthropic auth. Passed
+    #: into ``dispatch.build_env(extra=…)`` for every worker. Carries the token.
+    provider_env: tuple[tuple[str, str], ...] = ()
 
 
 def resolve_target(raw: str) -> Path:
@@ -113,6 +127,39 @@ def resolve_auth_mode(*, bare: bool, api_key: str | None) -> AuthMode:
     return "oauth"
 
 
+def _provider_overrides(
+    provider_name: str | None,
+    *,
+    api_key: str | None,
+    model: str | None,
+    env: dict[str, str] | None,
+) -> tuple[str | None, tuple[tuple[str, str], ...], str | None]:
+    """Resolve a ``--provider`` selection into ``(name, overlay, model)``.
+
+    Returns ``(None, (), model)`` when no provider is selected — Anthropic auth,
+    unchanged. Otherwise resolves the provider key (precedence: ``--api-key`` >
+    the provider's env vars), builds the child-env overlay, and defaults the
+    model to the provider's default when ``--model`` was not given. Raises
+    ``ConfigError`` on an unknown provider or a missing key. The caller forces
+    ``auth_mode="bare"`` (token auth, not the host OAuth login) when a provider
+    is set — the overlay carries ``ANTHROPIC_AUTH_TOKEN``, not ``ANTHROPIC_API_KEY``.
+    """
+    try:
+        prov = resolve_provider(provider_name)
+    except ProviderError as exc:
+        raise ConfigError(str(exc)) from exc
+    if prov is None:
+        return None, (), model
+    token = resolve_provider_token(prov, api_key, env=env)
+    if not token:
+        raise ConfigError(
+            f"--provider {prov.name} requires an API key — set "
+            f"{' or '.join(prov.token_envs)}, or pass --api-key."
+        )
+    overlay = tuple(provider_child_env(prov, token).items())
+    return prov.name, overlay, (model or prov.default_model)
+
+
 def build_run_config(
     *,
     target: str,
@@ -124,6 +171,7 @@ def build_run_config(
     chunk_threshold: int,
     max_concurrency: int,
     resume: bool,
+    provider: str | None = None,
     extra_sources: list[str] | None = None,
     ocr_enabled: bool = False,
     stt_key: str | None = None,
@@ -132,13 +180,21 @@ def build_run_config(
 ) -> RunConfig:
     """Assemble a validated ``RunConfig`` from raw CLI inputs."""
     resolved_target = resolve_target(target)
-    resolved_key = resolve_api_key(api_key, env=env)
-    auth_mode = resolve_auth_mode(bare=bare, api_key=resolved_key)
-    if auth_mode == "bare" and not resolved_key:
-        raise ConfigError(
-            "bare mode requires an API key — set OXISON_API_KEY or "
-            "ANTHROPIC_API_KEY, or drop --bare to use your Claude Code login."
-        )
+    prov_name, provider_env, model = _provider_overrides(
+        provider, api_key=api_key, model=model, env=env
+    )
+    if prov_name is not None:
+        # Provider mode: token auth via the overlay, never the host OAuth login.
+        auth_mode: AuthMode = "bare"
+        resolved_key: str | None = None
+    else:
+        resolved_key = resolve_api_key(api_key, env=env)
+        auth_mode = resolve_auth_mode(bare=bare, api_key=resolved_key)
+        if auth_mode == "bare" and not resolved_key:
+            raise ConfigError(
+                "bare mode requires an API key — set OXISON_API_KEY or "
+                "ANTHROPIC_API_KEY, or drop --bare to use your Claude Code login."
+            )
     out = (
         Path(output_dir).expanduser().resolve()
         if output_dir
@@ -163,6 +219,8 @@ def build_run_config(
         ocr_enabled=ocr_enabled,
         stt_key=stt_key,
         stt_provider=stt_provider,
+        provider=prov_name,
+        provider_env=provider_env,
     )
 
 
@@ -175,6 +233,7 @@ def build_greenfield_config(
     max_budget_usd: float | None,
     brief: str | None,
     urls: list[str] | None = None,
+    provider: str | None = None,
     extra_sources: list[str] | None = None,
     ocr_enabled: bool = False,
     stt_key: str | None = None,
@@ -187,13 +246,20 @@ def build_greenfield_config(
     worker ``cwd`` instead of an existing repo, and carries the brief + URLs.
     Always single-pass, single-worker, no resume.
     """
-    resolved_key = resolve_api_key(api_key, env=env)
-    auth_mode = resolve_auth_mode(bare=bare, api_key=resolved_key)
-    if auth_mode == "bare" and not resolved_key:
-        raise ConfigError(
-            "bare mode requires an API key — set OXISON_API_KEY or "
-            "ANTHROPIC_API_KEY, or drop --bare to use your Claude Code login."
-        )
+    prov_name, provider_env, model = _provider_overrides(
+        provider, api_key=api_key, model=model, env=env
+    )
+    if prov_name is not None:
+        auth_mode: AuthMode = "bare"
+        resolved_key: str | None = None
+    else:
+        resolved_key = resolve_api_key(api_key, env=env)
+        auth_mode = resolve_auth_mode(bare=bare, api_key=resolved_key)
+        if auth_mode == "bare" and not resolved_key:
+            raise ConfigError(
+                "bare mode requires an API key — set OXISON_API_KEY or "
+                "ANTHROPIC_API_KEY, or drop --bare to use your Claude Code login."
+            )
     out = (
         Path(output_dir).expanduser().resolve()
         if output_dir
@@ -217,6 +283,8 @@ def build_greenfield_config(
         stt_provider=stt_provider,
         urls=list(urls or []),
         brief=brief,
+        provider=prov_name,
+        provider_env=provider_env,
     )
 
 

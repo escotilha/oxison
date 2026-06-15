@@ -39,7 +39,7 @@ import json
 import os
 import signal
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -86,18 +86,33 @@ def generate_session_id() -> str:
     return str(uuid.uuid4())
 
 
-def build_env(*, api_key: str | None, whitelist: Sequence[str] = ()) -> dict[str, str]:
+def build_env(
+    *,
+    api_key: str | None,
+    whitelist: Sequence[str] = (),
+    extra: Mapping[str, str] | None = None,
+) -> dict[str, str]:
     """Compose a whitelisted child env.
 
     Starts from the base whitelist intersected with the parent env. The
     API key is injected only when supplied (bare mode); in OAuth mode it
     is None and the child uses the host's Claude Code credential store
     (discoverable via the whitelisted ``HOME``).
+
+    ``extra`` is an oxison-constructed overlay applied **last** (so it wins) —
+    used to route ``claude`` at a non-Anthropic provider via ``ANTHROPIC_BASE_URL``
+    + ``ANTHROPIC_AUTH_TOKEN`` (see ``providers.provider_child_env``). It is the
+    one sanctioned way ``ANTHROPIC_*`` reaches the child: oxison builds it from an
+    explicit ``--provider`` choice, never passing the ambient env through (which
+    item 4 of the module docstring deliberately strips). An empty/None overlay
+    leaves behavior unchanged.
     """
     allowed = set(_BASE_ENV_WHITELIST) | set(whitelist)
     env = {k: v for k, v in os.environ.items() if k in allowed}
     if api_key is not None:
         env["ANTHROPIC_API_KEY"] = api_key
+    if extra:
+        env.update(extra)
     return env
 
 
@@ -238,7 +253,7 @@ async def invoke(
         session_id=session_id,
         binary=binary,
     )
-    env = build_env(api_key=cfg.api_key)
+    env = build_env(api_key=cfg.api_key, extra=dict(cfg.provider_env))
 
     proc = await asyncio.create_subprocess_exec(
         *argv,

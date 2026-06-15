@@ -233,7 +233,7 @@ async def launch_worker(
         # NOT a valid UUID and makes the worker exit 1 before doing any work.
         session_id=generate_session_id(),
     )
-    env = build_env(api_key=api_key)
+    env = build_env(api_key=api_key, extra=dict(engine_config.provider_env))
 
     # Layer-1 sandbox: wrap the worker in srt so its writes are confined to the
     # worktree (+ scoped .git + ~/.claude) and its egress to the allowlist. The

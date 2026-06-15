@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Model providers — `--provider kimi` / `--provider grok`.** Run the whole
+  pipeline (`run` / `plan` / `ideate` / `build`) on any Anthropic-compatible
+  endpoint. oxison constructs the `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`
+  overlay from an explicit provider choice (never from the ambient env, which
+  stays stripped), defaults the model to the provider's, and — for sandboxed
+  builds — auto-allows the provider's API host in the worker egress allowlist.
+  Kimi K2 (`api.moonshot.ai`, key `KIMI_API_KEY`/`MOONSHOT_API_KEY`, default
+  `kimi-k2.7-code`) and xAI Grok (`api.x.ai`, key `XAI_API_KEY`/`GROK_API_KEY`,
+  default `grok-4.3`). Adding another provider is one registry entry.
+
 ## [0.2.0] — 2026-06-15
 
 oxison grows from "comprehend a repo and write docs" into a full
