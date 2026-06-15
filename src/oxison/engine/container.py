@@ -40,6 +40,8 @@ from .dispatch import (
     _changed_files,
     _extract_cost_from_log,
     build_worker_prompt,
+    redact_secrets,
+    worker_log_secrets,
 )
 from .engconfig import EngineConfig
 from .invoke import ToolSet, build_argv, build_env, kill_process_group
@@ -283,6 +285,8 @@ async def launch_worker_container(
         # remove it by name unconditionally (idempotent on a clean --rm exit).
         await remove_container(runtime, container_name)
 
+    # Redact any credential the worker may have surfaced into its log (M6/CWE-532).
+    redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
     exit_code = proc.returncode
     changed = await _changed_files(clone_dir, base_sha)
     cost = engine_config.worker_max_budget_usd if timed_out else _extract_cost_from_log(log_path)
