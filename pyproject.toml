@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "oxi-son"
 version = "0.4.0"
-description = "Point it at any repo; it comprehends the code and writes the product docs (PRODUCT / MANUAL / STACK)."
+description = "Point it at a repo or an idea; it writes the product docs (PRODUCT/MANUAL/STACK), plans a roadmap, and builds the work — on Claude, Kimi, or Grok."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
