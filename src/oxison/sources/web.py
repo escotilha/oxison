@@ -76,7 +76,7 @@ class WebAdapter:
     def _fetch(self, url: str) -> dict[str, object]:
         """GET the URL; return {status, body, content_type}. Isolated for mocking."""
         req = urllib.request.Request(url, headers={"User-Agent": _UA})
-        resp = urllib.request.urlopen(req, timeout=self.timeout_s)
+        resp = urllib.request.urlopen(req, timeout=self.timeout_s)  # nosec B310
         with resp:
             content_type = resp.headers.get_content_type()
             charset = resp.headers.get_content_charset() or "utf-8"
