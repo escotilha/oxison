@@ -201,8 +201,17 @@ async def launch_worker(
     await _git(["branch", "-D", branch], cwd=repo)
 
     # Capture the base commit so a worker that COMMITS still has its diff seen.
+    # A failure here is a git/engine problem (not the task's fault): routing it
+    # through adapter_failure gives a free retry + a clear error, instead of
+    # silently using "HEAD" and surfacing the opaque "worker produced no changes".
     rc_base, base_out = await _git(["rev-parse", "HEAD"], cwd=repo)
-    base_sha = base_out.strip() if rc_base == 0 else "HEAD"
+    if rc_base != 0 or not base_out.strip():
+        return DispatchOutcome(
+            ok=False, branch=branch, worktree_path=str(worktree),
+            adapter_failure=True,
+            error=f"git rev-parse HEAD failed in {repo}: {base_out.strip()[:200]}",
+        )
+    base_sha = base_out.strip()
 
     rc, msg = await _git(["worktree", "add", "-b", branch, os.fspath(worktree), "HEAD"], cwd=repo)
     if rc != 0:
@@ -277,7 +286,12 @@ async def launch_worker(
                     await asyncio.wait_for(proc.wait(), timeout=5.0)
                 if proc.returncode is None:
                     kill_process_group(proc, pgid, signal.SIGKILL)
-                    await proc.wait()
+                    # Bound this wait too: a process wedged in uninterruptible
+                    # (D-state) sleep can ignore even SIGKILL, and a bare
+                    # `await proc.wait()` would hang the event loop forever. Mirror
+                    # the container path's guarded teardown.
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(proc.wait(), timeout=5.0)
     except FileNotFoundError as exc:
         # The claude binary isn't installed — an engine outage, not a task fault.
         return DispatchOutcome(
