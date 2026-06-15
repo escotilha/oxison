@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import importlib
+import os
 import sys
 import time
 from collections.abc import Callable, Coroutine
@@ -29,9 +31,18 @@ from .config import (
     RunConfig,
     build_run_config,
 )
+from .credentials import (
+    CredentialError,
+    delete_saved_key,
+    detect_backend,
+    get_saved_key,
+    last4,
+    saved_key_status,
+    set_saved_key,
+)
 from .manifest import RunManifest
 from .preflight import PreflightError, preflight
-from .providers import provider_names, resolve_provider
+from .providers import Provider, provider_names, resolve_provider, resolve_provider_token
 
 BANNER = r"""
    ____  _  _  ____  ___   __  __ _
@@ -281,14 +292,139 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_p.set_defaults(func=cmd_build)
 
+    auth_p = sub.add_parser(
+        "auth", help="manage saved provider API keys (OS keychain, file fallback)"
+    )
+    auth_sub = auth_p.add_subparsers(dest="auth_cmd")
+    auth_set = auth_sub.add_parser(
+        "set", help="save a provider key (prompts hidden unless --api-key is given)"
+    )
+    auth_set.add_argument("provider", choices=provider_names())
+    auth_set.add_argument(
+        "--api-key", default=None,
+        help="the key to save (omit to be prompted; hidden input)",
+    )
+    auth_set.set_defaults(func=cmd_auth_set)
+    auth_status = auth_sub.add_parser(
+        "status", help="show which provider keys are saved / detected in the env"
+    )
+    auth_status.set_defaults(func=cmd_auth_status)
+    auth_rm = auth_sub.add_parser("rm", help="delete a saved provider key")
+    auth_rm.add_argument("provider", choices=provider_names())
+    auth_rm.set_defaults(func=cmd_auth_rm)
+    # `oxison auth` with no subcommand → show status
+    auth_p.set_defaults(func=cmd_auth_status)
+
     ver_p = sub.add_parser("version", help="print version + banner")
     ver_p.set_defaults(func=cmd_version)
 
     return parser
 
 
+def _prompt_and_maybe_save(prov: Provider) -> str | None:
+    """Interactively prompt for a provider key (hidden) and offer to save it.
+
+    Returns the entered key (saved or not) or None if the user gave nothing.
+    Only call this on an interactive terminal — the caller gates on isatty.
+    """
+    print(f"  no {prov.token_envs[0]} found for provider '{prov.name}'.")
+    try:
+        key = getpass.getpass(f"  Paste your {prov.name} API key (hidden): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if not key:
+        return None
+    try:
+        ans = input("  Save it for next time? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        ans = "n"
+    if ans in ("", "y", "yes"):
+        try:
+            backend = set_saved_key(prov.name, key)
+            print(f"  ✓ saved to {backend} (…{last4(key)}) — future runs won't ask")
+        except CredentialError as exc:
+            print(f"  ! could not save ({exc}); using the key for this run only")
+    return key
+
+
+def _resolve_provider_key(args: argparse.Namespace) -> str | None:
+    """Resolve the key to hand the config builder as ``api_key=``.
+
+    No provider selected → return the plain ``--api-key`` (existing behavior is
+    byte-for-byte unchanged). Provider selected → funnel: ``--api-key`` > env var
+    > saved keystore > interactive prompt (TTY only). Returns None when nothing
+    resolves and we can't prompt (headless), so the config builder raises its
+    clear "requires an API key" error instead of hanging on a prompt.
+    """
+    provider_name = getattr(args, "provider", None)
+    explicit = getattr(args, "api_key", None)
+    if not provider_name:
+        return explicit
+    prov = resolve_provider(provider_name)
+    if prov is None:  # argparse choices already validated; defensive
+        return explicit
+    key = resolve_provider_token(prov, explicit, env=None)  # --api-key > env
+    if key:
+        return key
+    key = get_saved_key(prov.name)  # saved keystore
+    if key:
+        return key
+    if sys.stdin.isatty():  # interactive prompt + optional save
+        return _prompt_and_maybe_save(prov)
+    return None  # headless: let the builder raise the clear error
+
+
 def cmd_version(_args: argparse.Namespace) -> int:
     print(BANNER.format(version=__version__))
+    return 0
+
+
+def cmd_auth_set(args: argparse.Namespace) -> int:
+    prov = resolve_provider(args.provider)
+    if prov is None:  # unreachable: argparse choices validates the name
+        print(f"oxison: unknown provider {args.provider!r}")
+        return 2
+    if args.api_key:
+        key = args.api_key.strip()
+    else:
+        try:
+            key = getpass.getpass(f"Paste your {prov.name} API key (hidden): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 2
+    if not key:
+        print("oxison: no key provided")
+        return 2
+    try:
+        backend = set_saved_key(prov.name, key)
+    except CredentialError as exc:
+        print(f"oxison: {exc}")
+        return 1
+    print(f"✓ saved {prov.name} key to {backend} (…{last4(key)})")
+    return 0
+
+
+def cmd_auth_status(_args: argparse.Namespace) -> int:
+    print(f"credential backend: {detect_backend()}")
+    for name in provider_names():
+        prov = resolve_provider(name)
+        if prov is None:  # unreachable: provider_names() yields known names
+            continue
+        present, backend, l4 = saved_key_status(name)
+        env_var = next((v for v in prov.token_envs if os.environ.get(v)), None)
+        saved = f"saved ✓ ({backend}, …{l4})" if present else "not saved"
+        env_note = f"; env {env_var} set" if env_var else ""
+        print(f"  {name:6} {saved}{env_note}")
+    return 0
+
+
+def cmd_auth_rm(args: argparse.Namespace) -> int:
+    if delete_saved_key(args.provider):
+        print(f"✓ removed saved {args.provider} key")
+    else:
+        print(f"no saved {args.provider} key to remove")
     return 0
 
 
@@ -324,7 +460,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             target=args.target,
             output_dir=args.output_dir,
             bare=args.bare,
-            api_key=args.api_key,
+            api_key=_resolve_provider_key(args),
             model=args.model,
             max_budget_usd=args.max_budget_usd,
             chunk_threshold=args.chunk_threshold,
@@ -395,7 +531,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
             target=cwd_target,
             output_dir=output_dir,
             bare=args.bare,
-            api_key=args.api_key,
+            api_key=_resolve_provider_key(args),
             model=args.model,
             max_budget_usd=args.max_budget_usd,
             chunk_threshold=DEFAULT_CHUNK_THRESHOLD,
@@ -504,7 +640,7 @@ def cmd_ideate(args: argparse.Namespace) -> int:
         cfg = build_greenfield_config(
             output_dir=args.output_dir,
             bare=args.bare,
-            api_key=args.api_key,
+            api_key=_resolve_provider_key(args),
             model=args.model,
             max_budget_usd=args.max_budget_usd,
             brief=brief,
@@ -619,7 +755,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     try:
         cfg = build_run_config(
             target=str(repo), output_dir=str(repo / "oxison-build"),
-            bare=args.bare, api_key=args.api_key, model=args.model,
+            bare=args.bare, api_key=_resolve_provider_key(args), model=args.model,
             max_budget_usd=args.worker_budget_usd,
             chunk_threshold=DEFAULT_CHUNK_THRESHOLD, max_concurrency=args.max_workers,
             resume=False, provider=args.provider,

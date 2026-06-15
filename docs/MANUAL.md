@@ -148,6 +148,18 @@ oxison run /path/to/repo --provider grok --model grok-build-0.1
 
 Provider mode forces bare-style token auth (it ignores the host OAuth login) and defaults `--model` to the provider's; override with `--model`. For a sandboxed `oxison build`, the provider's API host is auto-added to the worker egress allowlist so the sandboxed worker can reach it.
 
+#### Saving a provider key (`oxison auth`)
+
+You don't have to set an env var every session. The first time you run a provider with no key, oxison prompts (hidden) and offers to save it; thereafter it's resolved automatically. Keys are stored in your **OS keychain** (macOS Keychain via `security`, Linux libsecret via `secret-tool`) when available, falling back to a `0600` JSON file at `$XDG_CONFIG_HOME/oxison/credentials` (else `~/.config/oxison/credentials`).
+
+| Command | Effect |
+|---|---|
+| `oxison auth set <provider>` | Prompt (hidden) and save a key; or `--api-key <key>` for non-interactive/scripts |
+| `oxison auth status` | Show the active backend and, per provider, whether a key is saved (backend + last-4) or detected in the env. Never prints a key |
+| `oxison auth rm <provider>` | Delete a saved key from every backend |
+
+Full resolution order per run: `--api-key` > env var > saved key > interactive prompt. The prompt only appears on an interactive terminal — in CI/headless oxison fails fast with a clear "set `XAI_API_KEY`…" message rather than hanging. oxison only ever displays the last 4 characters of a key.
+
 ### Output directory
 
 Artifacts are written to `./oxison-output/` by default. Override with `--output-dir`:

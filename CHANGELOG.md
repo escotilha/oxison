@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Seamless provider keys — prompt-and-save + `oxison auth`.** The first time you
+  run a provider (`--provider kimi`/`grok`) with no key, oxison prompts for it
+  (hidden) and offers to save it; every run after is zero-touch. Keys are stored in
+  the **OS keychain** (macOS `security`, Linux `secret-tool`) with a `0600`-file
+  fallback (`~/.config/oxison/credentials`). New `oxison auth set/status/rm`
+  manages saved keys (status shows backend + last-4 only, never the key). Full
+  resolution order: `--api-key` > env var > saved key > interactive prompt; the
+  prompt is TTY-gated so CI/headless fails fast instead of hanging.
+
 ## [0.3.0] — 2026-06-15
 
 ### Added
