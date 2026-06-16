@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Security
+- **Build-worker prompt fence is now break-out-proof (CTO re-audit HIGH-1).** The
+  `<task_data>` fields are sanitized so a roadmap field containing `</task_data>`
+  can't close the fence early and inject into the worker's Rules section.
+- **oxison's own saved provider keys are denied to the sandboxed worker (M1).**
+  `~/.config/oxison` is added to the sandbox `denyRead` list — closing (with the
+  fence fix) the prompt-injection → read-keys → exfiltrate chain the re-audit found.
+- **SSRF guard handles IPv4-mapped IPv6 (CAND-2).** `::ffff:127.0.0.1`-style
+  addresses are re-evaluated as their embedded IPv4, so the mapped form can't slip
+  past the private/loopback block.
+
+### Changed
+- **`locks_expire()` no longer scans the lock table every no-progress spin (M3).**
+  Moved inside the per-tick cache refresh (the unaddressed half of #17), and its
+  deletes are batched into one `executemany` (L2).
+- **README documents the platform-dependent container egress** (Linux narrows via
+  in-container srt; macOS keeps default egress with a warning) (M2).
+
 ### Internal
 - **Code-health pass (#18, partial).** Lifted the shared git/log helpers
   (`git_cmd`/`changed_files`/`extract_cost_from_log`/`parse_changed_files`) out of

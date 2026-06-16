@@ -63,6 +63,12 @@ class DispatchOutcome:
     log_path: str | None = None
 
 
+def _fence_safe(text: str) -> str:
+    """Neutralize the ``<task_data>`` fence delimiters in an untrusted field so it
+    can't close the fence early and inject into the Rules section (H1/HIGH-1)."""
+    return text.replace("</task_data>", "[/task_data]").replace("<task_data>", "[task_data]")
+
+
 def build_worker_prompt(task_title: str, *, rationale: str, acceptance: list[str],
                         files_hint: list[str], repo_name: str) -> str:
     """The instruction a write worker receives to implement one task.
@@ -79,9 +85,17 @@ def build_worker_prompt(task_title: str, *, rationale: str, acceptance: list[str
     into a task description is treated as content to build against, not a command
     that overrides the Rules below (which live OUTSIDE the fence and are the
     worker's only authority). Defence in depth on top of the sandbox.
+
+    The fence is only sound if a field can't *close* it: every interpolated field
+    is run through ``_fence_safe`` first, which neutralizes a literal
+    ``</task_data>`` (or ``<task_data>``) so a crafted field can't break out of
+    the block and promote its text into the Rules section.
     """
-    accept = "\n".join(f"- {a}" for a in acceptance) or "- (none specified)"
-    hints = ", ".join(files_hint) if files_hint else "(use your judgment)"
+    accept = "\n".join(f"- {_fence_safe(a)}" for a in acceptance) or "- (none specified)"
+    hints = ", ".join(_fence_safe(f) for f in files_hint) if files_hint else "(use your judgment)"
+    task_title = _fence_safe(task_title)
+    rationale = _fence_safe(rationale)
+    repo_name = _fence_safe(repo_name)
     return (
         "You are an Oxfaz build worker implementing ONE task in a git worktree "
         f"of the project `{repo_name}`. You have full read/write tools.\n\n"

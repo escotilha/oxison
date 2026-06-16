@@ -54,6 +54,12 @@ def _host_is_blocked(hostname: str | None) -> bool:
         return True
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
+        # An IPv4-mapped IPv6 address (``::ffff:127.0.0.1``) classifies as global
+        # on CPython's ipaddress but routes to the embedded IPv4 — re-evaluate it
+        # as that IPv4, or the mapped form bypasses the guard (CAND-2).
+        mapped = getattr(ip, "ipv4_mapped", None)
+        if mapped is not None:
+            ip = mapped
         if (
             ip.is_private or ip.is_loopback or ip.is_link_local
             or ip.is_reserved or ip.is_multicast or ip.is_unspecified

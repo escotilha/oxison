@@ -444,9 +444,12 @@ class TaskStore:
             age = now_epoch - _epoch(r["acquired_at"])
             if age > ttl_seconds and r["task_id"] not in live_task_ids:
                 to_delete.append(r["path"])
-        for path in to_delete:
-            self._conn.execute("DELETE FROM lock WHERE path = ?", (path,))
         if to_delete:
+            # Batch the deletes into a single executemany call (static SQL — no
+            # dynamic IN-clause, so no bandit B608) rather than N execute()s (L2).
+            self._conn.executemany(
+                "DELETE FROM lock WHERE path = ?", [(p,) for p in to_delete]
+            )
             self._conn.commit()
         return len(to_delete)
 

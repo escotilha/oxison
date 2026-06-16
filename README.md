@@ -83,10 +83,16 @@ trust.
 #### Stronger filesystem isolation: the container sandbox (`--sandbox-layer container`)
 
 For CI, or to isolate a worker more strongly than srt's allowlist, run each
-worker **inside a rootless container**. This is the stronger *filesystem*
-boundary; note the container currently keeps **default network egress** (see the
-caveat below), so for a fully-hostile repo also narrow egress — that tightening
-is tracked, not yet shipped.
+worker **inside a rootless container** — the stronger *filesystem* boundary (only
+the worker's clone is mounted; the host filesystem is physically absent).
+
+> **Network egress (platform-dependent).** On **Linux**, the container worker
+> also runs under srt *inside* the container, so its egress is confined to the
+> same domain allowlist as Layer-1. On **macOS**, the podman VM can't nest srt's
+> bind-mount, so egress narrowing is **skipped with a loud stderr warning** —
+> the container keeps the filesystem boundary but default (open) egress. Run
+> Layer-2 on Linux (where it deploys) for egress control, or use the default
+> `--sandbox-layer srt` on macOS.
 
 ```bash
 # one-time: a container runtime + the worker image

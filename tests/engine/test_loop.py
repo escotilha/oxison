@@ -377,7 +377,9 @@ async def test_no_progress_tick_reuses_cached_queries(tmp_path):
     s = TaskStore.open(tmp_path)
     s.add_task("a", "A", priority=1, acceptance=["x"], depends_on=["never-merges"])
 
-    calls = {"status_counts": 0, "merged_identifiers": 0}
+    # locks_expire included (M3 re-audit): it must also be gated by the cache, not
+    # fire on every 20 ms no-progress spin.
+    calls = {"status_counts": 0, "merged_identifiers": 0, "locks_expire": 0}
     for name in calls:
         orig = getattr(s, name)
 
@@ -401,6 +403,7 @@ async def test_no_progress_tick_reuses_cached_queries(tmp_path):
     # each stable query runs exactly once despite multiple no-progress ticks.
     assert calls["status_counts"] == 1
     assert calls["merged_identifiers"] == 1
+    assert calls["locks_expire"] == 1  # M3: not re-run every spin tick
 
 
 def _peak_tracking_dispatcher():
