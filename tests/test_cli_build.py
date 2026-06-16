@@ -131,6 +131,56 @@ def test_build_srt_missing_fails_at_preflight(tmp_path, monkeypatch, capsys):
     assert "srt runtime is not installed" in capsys.readouterr().out
 
 
+def test_build_memory_on_by_default(tmp_path, monkeypatch, capsys):
+    repo = _git_repo(tmp_path)
+    rm = _write_roadmap(tmp_path)
+    monkeypatch.setattr(
+        cli, "preflight", lambda cfg: types.SimpleNamespace(claude_version="test")
+    )
+    import oxison.engine.sandbox as sb
+    monkeypatch.setattr(sb, "resolve_srt_binary", lambda configured=None: "/fake/srt")
+    seen = {}
+
+    async def fake_loop(store, **kwargs):
+        seen["recorder"] = kwargs.get("recorder")
+        return LoopSummary(ticks=1, dispatched=1, merged=1, failed=0,
+                           spent_usd=1.0, halt_reason="complete")
+    monkeypatch.setattr(engine_loop, "run_build_loop", fake_loop)
+    args = cli.build_parser().parse_args(["build", str(rm), "--repo", str(repo)])
+    rc = args.func(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "memory        : on" in out  # banner reflects default-on
+    assert seen["recorder"] is not None  # capture hook wired into the loop
+    assert (repo / "oxison-build" / "memory.db").exists()  # store opened
+
+
+def test_build_no_memory_flag(tmp_path, monkeypatch, capsys):
+    repo = _git_repo(tmp_path)
+    rm = _write_roadmap(tmp_path)
+    monkeypatch.setattr(
+        cli, "preflight", lambda cfg: types.SimpleNamespace(claude_version="test")
+    )
+    import oxison.engine.sandbox as sb
+    monkeypatch.setattr(sb, "resolve_srt_binary", lambda configured=None: "/fake/srt")
+    seen = {}
+
+    async def fake_loop(store, **kwargs):
+        seen["recorder"] = kwargs.get("recorder")
+        return LoopSummary(ticks=1, dispatched=1, merged=1, failed=0,
+                           spent_usd=1.0, halt_reason="complete")
+    monkeypatch.setattr(engine_loop, "run_build_loop", fake_loop)
+    args = cli.build_parser().parse_args(
+        ["build", str(rm), "--repo", str(repo), "--no-memory"]
+    )
+    rc = args.func(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "memory        : off (--no-memory)" in out
+    assert seen["recorder"] is None  # no capture hook when disabled
+    assert not (repo / "oxison-build" / "memory.db").exists()  # store never opened
+
+
 def test_build_no_sandbox_warns_and_runs(tmp_path, monkeypatch, capsys):
     repo = _git_repo(tmp_path)
     rm = _write_roadmap(tmp_path)
