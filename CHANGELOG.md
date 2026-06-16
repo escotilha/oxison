@@ -9,6 +9,11 @@
   re-driven.
 
 ### Changed
+- **`--max-workers>1` now dispatches concurrently (#16).** The build loop ran the
+  eligible batch serially, so `--max-workers` was wall-clock-identical to 1; it
+  now `asyncio.gather`s the batch when there's no integrator (integration stays
+  serial for the `--ff-only` invariant). File-locks still serialize tasks that
+  declare overlapping files.
 - **Per-tick query cache cuts no-progress churn (#17).** `merged_identifiers` /
   `status_counts` / `inflight_tasks` / eligibility are cached per tick and
   re-queried only when a task changes state, so a blocked LP2 spin no longer

@@ -77,6 +77,22 @@ class LoopSummary:
     integrated: int = 0
 
 
+@dataclass
+class _TaskRun:
+    """Outcome of one dispatched task within a tick (returned by ``run_one``).
+
+    ``None`` from ``run_one`` means the task was skipped (lock conflict or a raced
+    dispatch guard) — no dispatch happened. A non-None ``_TaskRun`` always means
+    exactly one dispatch occurred, so the caller folds it into the counters.
+    """
+
+    charged: float
+    merged: bool = False
+    integrated: bool = False
+    failed: bool = False
+    progressed: bool = False
+
+
 def _eligible(store: TaskStore, options: LoopOptions, merged_ids: set[str]) -> list[Task]:
     """Planned tasks ready to dispatch: under the redispatch cap, highest
     priority first, and with every ``depends_on`` already merged (so a task
@@ -135,6 +151,66 @@ async def run_build_loop(
             spent_usd=round(spent, 6), halt_reason=reason, integrated=integrated,
         )
 
+    async def run_one(task: Task) -> _TaskRun | None:
+        """Claim → durable-dispatch → run → grade/integrate → record one task.
+
+        The claim + ``mark_dispatched`` are SYNCHRONOUS (they execute before this
+        coroutine's first ``await``), so when several ``run_one`` coroutines are
+        gathered they cannot double-claim the same files or race the I1/I2 dispatch
+        guard — each one's prefix runs to completion before the next is scheduled.
+        Returns ``None`` if the task was skipped; otherwise a ``_TaskRun`` the
+        caller folds into the counters.
+        """
+        if store.locks_claim(task.id, task.files_touched, now_epoch=now_epoch_fn()):
+            return None
+        branch = f"{options.branch_prefix}{task.identifier}"
+        if not store.mark_dispatched(task.identifier, branch, now=now_fn()):
+            store.locks_release(task.id)
+            return None
+        try:
+            outcome = await dispatcher(task, branch)
+            # LP3 accounting: charge actual cost; a timed-out worker that reported
+            # no cost is charged its cap floor so the meter is honest.
+            charged = outcome.cost_usd
+            if outcome.timed_out and charged <= 0:
+                charged = options.worker_budget_floor
+            if outcome.adapter_failure:
+                # Engine-side problem: retry for free, NOT progress (LP2 trips on
+                # a persistent outage).
+                store.mark_adapter_failure(
+                    task.identifier, reason=outcome.error or "adapter failure"
+                )
+                return _TaskRun(charged=charged)
+            if not outcome.ok:
+                store.mark_failed(task.identifier, now=now_fn(),
+                                  reason=outcome.error or "worker failed",
+                                  failure_class="worker")
+                return _TaskRun(charged=charged, failed=True, progressed=True)
+            verdict = grader(outcome)
+            if not verdict.ok:
+                store.mark_failed(task.identifier, now=now_fn(),
+                                  reason=verdict.reason, failure_class="grader")
+                return _TaskRun(charged=charged, failed=True, progressed=True)
+            if integrator is None:
+                # Default: DB-only merge boundary (per-branch, no git advance).
+                store.mark_merged(task.identifier, now=now_fn())
+                return _TaskRun(charged=charged, merged=True, progressed=True)
+            # Integration mode (serial only): actually merge the branch into main.
+            merge = await integrator(task, outcome)
+            if merge.ok:
+                store.mark_merged(task.identifier, now=now_fn())
+                return _TaskRun(charged=charged, merged=True, integrated=True, progressed=True)
+            # Conflict/failure: main is NOT advanced. Burn a retry under a distinct
+            # class so LP2 accounting stays honest.
+            store.mark_failed(task.identifier, now=now_fn(),
+                              reason=merge.reason, failure_class="integration")
+            return _TaskRun(charged=charged, failed=True, progressed=True)
+        except Exception as exc:  # noqa: BLE001 — dispatcher infra error is engine-side
+            store.mark_adapter_failure(task.identifier, reason=f"dispatch error: {exc}")
+            return _TaskRun(charged=0.0)
+        finally:
+            store.locks_release(task.id)
+
     # M5 — per-tick query cache. merged_ids / status_counts / inflight / eligible
     # are stable between ticks until a task changes state, so re-querying them on
     # every 20 ms no-progress spin is pure churn (~250 q/s when blocked). Cache
@@ -177,75 +253,40 @@ async def run_build_loop(
 
         progressed = False
         mutated = False  # any task-state change this tick → invalidate the cache
-        for task in eligible:
-            # File-serialization: claim the task's declared files before
-            # dispatch. A conflict means another in-flight task holds them —
-            # skip this task this tick (it stays planned, retried later).
-            if store.locks_claim(task.id, task.files_touched, now_epoch=now_epoch_fn()):
-                continue
-            branch = f"{options.branch_prefix}{task.identifier}"
-            # Crash-safe: durably record dispatched BEFORE spawning the worker.
-            # The guard makes a second/raced dispatch a no-op (I1/I2).
-            if not store.mark_dispatched(task.identifier, branch, now=now_fn()):
-                store.locks_release(task.id)
-                continue
+
+        def fold(run: _TaskRun) -> None:
+            nonlocal dispatched, spent, merged, failed, integrated, progressed, mutated
             dispatched += 1
-            mutated = True  # dispatched + the terminal mark below change state
+            spent += run.charged
+            if run.merged:
+                merged += 1
+            if run.integrated:
+                integrated += 1
+            if run.failed:
+                failed += 1
+            if run.progressed:
+                progressed = True
+            mutated = True  # a dispatched task always changes state
 
-            try:
-                outcome = await dispatcher(task, branch)
-                # LP3 accounting: charge actual cost; a timed-out worker that
-                # reported no cost is charged its cap floor so the meter is honest.
-                charged = outcome.cost_usd
-                if outcome.timed_out and charged <= 0:
-                    charged = options.worker_budget_floor
-                spent += charged
-
-                if outcome.adapter_failure:
-                    # Engine-side problem: retry for free, NOT progress (so a
-                    # persistent outage trips LP2).
-                    store.mark_adapter_failure(
-                        task.identifier, reason=outcome.error or "adapter failure"
-                    )
-                elif not outcome.ok:
-                    store.mark_failed(task.identifier, now=now_fn(),
-                                      reason=outcome.error or "worker failed",
-                                      failure_class="worker")
-                    failed += 1
-                    progressed = True
-                else:
-                    verdict = grader(outcome)
-                    if not verdict.ok:
-                        store.mark_failed(task.identifier, now=now_fn(),
-                                          reason=verdict.reason, failure_class="grader")
-                        failed += 1
-                    elif integrator is None:
-                        # Default: DB-only merge boundary (per-branch, no git advance).
-                        store.mark_merged(task.identifier, now=now_fn())
-                        merged += 1
-                    else:
-                        # Integration mode: actually merge the branch into main.
-                        merge = await integrator(task, outcome)
-                        if merge.ok:
-                            store.mark_merged(task.identifier, now=now_fn())
-                            merged += 1
-                            integrated += 1
-                        else:
-                            # Conflict/failure: main is NOT advanced. Burn a retry
-                            # under a distinct class so LP2 accounting stays honest.
-                            store.mark_failed(task.identifier, now=now_fn(),
-                                              reason=merge.reason, failure_class="integration")
-                            failed += 1
-                    progressed = True
-            except Exception as exc:  # noqa: BLE001 — dispatcher infra error is engine-side
-                store.mark_adapter_failure(task.identifier, reason=f"dispatch error: {exc}")
-            finally:
-                store.locks_release(task.id)
-
-            # LP3 — stop dispatching within this tick the moment the ceiling is
-            # crossed, so a wide tick can't overshoot before the top-of-loop check.
-            if options.budget_ceiling_usd is not None and spent >= options.budget_ceiling_usd:
-                break
+        # M3 — dispatch the eligible batch concurrently when it's safe: only with
+        # NO integrator (the --ff-only merge invariant needs serial, and cmd_build
+        # already forces max_workers=1 there) and max_workers>1. File-lock
+        # correctness holds because each run_one's claim+mark_dispatched prefix is
+        # synchronous (see run_one). Otherwise stay serial (preserving the
+        # mid-tick budget break for the historical path).
+        if integrator is None and options.max_workers > 1:
+            for run in await asyncio.gather(*(run_one(t) for t in eligible)):
+                if run is not None:
+                    fold(run)
+        else:
+            for task in eligible:
+                run = await run_one(task)
+                if run is not None:
+                    fold(run)
+                # LP3 — stop dispatching within this tick once the ceiling is
+                # crossed, so a wide tick can't overshoot before the top check.
+                if options.budget_ceiling_usd is not None and spent >= options.budget_ceiling_usd:
+                    break
 
         # M5 — invalidate the per-tick cache iff a task changed state this tick;
         # an unchanged (blocked) tick keeps the cache so the next spin re-queries
