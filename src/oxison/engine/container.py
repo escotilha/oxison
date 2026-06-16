@@ -332,9 +332,11 @@ async def launch_worker_container(
         # outlive a timeout (holding the clone + the API key in its env). Force-
         # remove it by name unconditionally (idempotent on a clean --rm exit).
         await remove_container(runtime, container_name)
+        # Redact any credential the worker surfaced into its log (M6/CWE-532) on
+        # EVERY exit path — in finally so an unexpected exception can't leave the
+        # key in the persisted log.
+        redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
 
-    # Redact any credential the worker may have surfaced into its log (M6/CWE-532).
-    redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
     exit_code = proc.returncode
     changed = await changed_files(clone_dir, base_sha)
     cost = engine_config.worker_max_budget_usd if timed_out else extract_cost_from_log(log_path)
