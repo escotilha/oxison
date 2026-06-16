@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Loop reconciles a stranded `planning` task on startup (#15).** A task left in
+  `planning` after a crash was caught by neither the inflight sweep nor the
+  completion check and could wedge the loop; it's now reset to `planned` and
+  re-driven.
+
+### Changed
+- **Per-tick query cache cuts no-progress churn (#17).** `merged_identifiers` /
+  `status_counts` / `inflight_tasks` / eligibility are cached per tick and
+  re-queried only when a task changes state, so a blocked LP2 spin no longer
+  re-runs them every 20 ms (~250 q/s → ~0 while blocked).
+
 ### Security
 - **Build-worker prompt-injection hardening (#13).** Untrusted task fields
   (roadmap/web-derived) are now enclosed in a `<task_data>` fence labelled

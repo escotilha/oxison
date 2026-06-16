@@ -349,3 +349,53 @@ async def test_no_integrator_is_db_only_merge(tmp_path):
     assert summary.merged == 1
     assert summary.integrated == 0
     assert s.status_counts().get(STATUS_MERGED) == 1
+
+
+@pytest.mark.asyncio
+async def test_planning_task_reconciled_on_startup(tmp_path):
+    # #15 (M2): a task stranded in `planning` (crash mid plan-transition) must be
+    # reset to `planned` at startup, else it wedges completion forever.
+    s = _store_with(tmp_path, 2)
+    s.mark_planning("oxpz-0")
+    assert s.status_counts().get("planning") == 1
+
+    async def disp(task, branch):
+        return _ok_outcome(branch)
+
+    summary = await _run(s, options=LoopOptions(max_workers=1), dispatcher=disp)
+    assert summary.halt_reason == HALT_COMPLETE
+    assert summary.merged == 2  # the reset task was driven to completion
+    assert s.status_counts().get("planning", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_no_progress_tick_reuses_cached_queries(tmp_path):
+    # #17 (M5): a task blocked on an unmet dependency makes no progress; the loop
+    # spins via LP2. The stable queries must be cached, not re-run every spin.
+    s = TaskStore.open(tmp_path)
+    s.add_task("a", "A", priority=1, acceptance=["x"], depends_on=["never-merges"])
+
+    calls = {"status_counts": 0, "merged_identifiers": 0}
+    for name in calls:
+        orig = getattr(s, name)
+
+        def make(orig, name):
+            def wrapped(*a, **k):
+                calls[name] += 1
+                return orig(*a, **k)
+            return wrapped
+
+        setattr(s, name, make(orig, name))
+
+    async def disp(task, branch):  # never called — "a" is never eligible
+        raise AssertionError("dispatcher must not run for a blocked task")
+
+    summary = await _run(
+        s, options=LoopOptions(max_workers=1, no_progress_ticks=3, max_ticks=20),
+        dispatcher=disp,
+    )
+    assert summary.halt_reason == HALT_NO_PROGRESS
+    # Nothing mutates across the spin, so the cache is populated once and reused:
+    # each stable query runs exactly once despite multiple no-progress ticks.
+    assert calls["status_counts"] == 1
+    assert calls["merged_identifiers"] == 1

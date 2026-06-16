@@ -77,11 +77,11 @@ class LoopSummary:
     integrated: int = 0
 
 
-def _eligible(store: TaskStore, options: LoopOptions) -> list[Task]:
+def _eligible(store: TaskStore, options: LoopOptions, merged_ids: set[str]) -> list[Task]:
     """Planned tasks ready to dispatch: under the redispatch cap, highest
     priority first, and with every ``depends_on`` already merged (so a task
-    never runs before its prerequisites)."""
-    merged_ids = store.merged_identifiers()
+    never runs before its prerequisites). ``merged_ids`` is passed in (not
+    re-queried) so the tick can reuse its cached snapshot (M5)."""
     candidates = store.find_next_planned(
         limit=_CANDIDATE_POOL, redispatch_cap=options.redispatch_cap
     )
@@ -116,6 +116,10 @@ async def run_build_loop(
             stale.identifier, reason="reconciled: stale dispatched on restart"
         )
         store.locks_release(stale.id)
+    # A task left ``planning`` (crash mid plan-transition) is caught by neither the
+    # inflight sweep nor completion (it counts as not-complete), so it would wedge
+    # the loop — reset it to ``planned`` so it gets re-driven (M2).
+    store.reset_planning()
 
     tick = 0
     spent = 0.0
@@ -131,6 +135,13 @@ async def run_build_loop(
             spent_usd=round(spent, 6), halt_reason=reason, integrated=integrated,
         )
 
+    # M5 — per-tick query cache. merged_ids / status_counts / inflight / eligible
+    # are stable between ticks until a task changes state, so re-querying them on
+    # every 20 ms no-progress spin is pure churn (~250 q/s when blocked). Cache
+    # them and invalidate (set to None) only when a tick mutates task state — so a
+    # blocked spin runs zero of these queries while LP2 counts down.
+    cache: tuple[set[str], dict[str, int], set[int], list[Task]] | None = None
+
     while True:
         # LP1 — iteration cap (checked before doing tick work).
         if options.max_ticks is not None and tick >= options.max_ticks:
@@ -140,10 +151,18 @@ async def run_build_loop(
             return summary(HALT_BUDGET)
 
         tick += 1
+        if cache is None:
+            merged_ids = store.merged_identifiers()
+            counts = store.status_counts()
+            live_ids = {t.id for t in store.inflight_tasks()}
+            eligible = _eligible(store, options, merged_ids)
+            cache = (merged_ids, counts, live_ids, eligible)
+        else:
+            merged_ids, counts, live_ids, eligible = cache
+
         # L4 — sweep stale locks whose holder is dead (TTL-expired). The live
         # set is the currently in-flight tasks; anything else holding an old
         # lock is an orphan and is reclaimed so it can't block forever.
-        live_ids = {t.id for t in store.inflight_tasks()}
         store.locks_expire(
             now_epoch=now_epoch_fn(), ttl_seconds=options.lock_ttl_seconds,
             live_task_ids=live_ids,
@@ -153,12 +172,11 @@ async def run_build_loop(
         # and would falsely report COMPLETE while they remain). Planned tasks
         # that are merely blocked (unmet deps / cap-exhausted) make no progress
         # and are bounded by LP2 — a dependency deadlock surfaces there.
-        counts = store.status_counts()
         if counts.get(STATUS_PLANNED, 0) == 0 and counts.get(STATUS_PLANNING, 0) == 0:
             return summary(HALT_COMPLETE)
-        eligible = _eligible(store, options)
 
         progressed = False
+        mutated = False  # any task-state change this tick → invalidate the cache
         for task in eligible:
             # File-serialization: claim the task's declared files before
             # dispatch. A conflict means another in-flight task holds them —
@@ -172,6 +190,7 @@ async def run_build_loop(
                 store.locks_release(task.id)
                 continue
             dispatched += 1
+            mutated = True  # dispatched + the terminal mark below change state
 
             try:
                 outcome = await dispatcher(task, branch)
@@ -227,6 +246,12 @@ async def run_build_loop(
             # crossed, so a wide tick can't overshoot before the top-of-loop check.
             if options.budget_ceiling_usd is not None and spent >= options.budget_ceiling_usd:
                 break
+
+        # M5 — invalidate the per-tick cache iff a task changed state this tick;
+        # an unchanged (blocked) tick keeps the cache so the next spin re-queries
+        # nothing.
+        if mutated:
+            cache = None
 
         # LP2 — no-progress halt.
         no_progress = 0 if progressed else no_progress + 1
