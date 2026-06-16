@@ -276,8 +276,8 @@ async def launch_worker_container(
             worktree=_CONTAINER_WORK, repo=_CONTAINER_WORK,
             task_identifier=task_identifier, home=_CONTAINER_HOME,
             # /tmp is the *container's* scratch dir (an allowWrite path inside the
-            # sandbox), not a host temp file — S108 doesn't apply here.
-            allowed_domains=domains, tmpdir="/tmp",  # noqa: S108
+            # sandbox), not a host temp file — S108/B108 don't apply here.
+            allowed_domains=domains, tmpdir="/tmp",  # noqa: S108  # nosec B108
         )
         srt_settings_host = log_path.parent / f"{task_identifier}.container.srt.json"
         write_srt_settings(srt_settings_host, settings)
