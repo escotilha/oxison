@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.0] — 2026-06-16
 
 ### Security
 - **Build-worker prompt fence is now break-out-proof (CTO re-audit HIGH-1).** The
