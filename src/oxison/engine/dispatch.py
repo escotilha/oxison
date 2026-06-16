@@ -23,7 +23,6 @@ import asyncio
 import contextlib
 import os
 import signal
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from oxison.dispatch import generate_session_id
@@ -44,23 +43,12 @@ from .sandbox import (
     write_srt_settings,
 )
 
+# DispatchOutcome moved to engine/types.py (L3); re-exported so existing
+# `from .dispatch import DispatchOutcome` call sites keep working unchanged.
+from .types import DispatchOutcome
+
 #: A generous default wall-clock cap for one write worker.
 DEFAULT_WORKER_TIMEOUT_S = 30 * 60.0
-
-
-@dataclass
-class DispatchOutcome:
-    """Result of one write-worker run."""
-
-    ok: bool
-    branch: str
-    worktree_path: str
-    changed_files: list[str] = field(default_factory=list)
-    cost_usd: float = 0.0
-    timed_out: bool = False
-    adapter_failure: bool = False
-    error: str | None = None
-    log_path: str | None = None
 
 
 def _fence_safe(text: str) -> str:

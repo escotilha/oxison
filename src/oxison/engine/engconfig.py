@@ -76,26 +76,17 @@ class EngineConfig:
     """Reject a plan whose ``files_touched`` exceeds this — scope fence."""
 
     # --- grader ---
-    grader_model: str | None = None
-    """``None`` = inherit the run's model; set to pin the grader model."""
     grader_diff_size_cap: int = 1500
-    """Reject a diff larger than this many lines (grader rule)."""
-    grader_skip_halt_k: int = 3
-    """Under --auto-merge, K consecutive grader skips trip a halt (M4)."""
-
-    # --- CI probe / merge ---
-    ci_min_free_slots: int = 1
-    ci_max_backlog: int = 24
-    auto_merge_threshold: int = 0
-    """Grader-clean PRs at/above this confidence auto-merge (under --auto-merge)."""
-    auto_merge_cooldown_seconds: int = 0
+    """Reject a diff larger than this many lines (grader rule). NOTE: not yet
+    auto-threaded into the grader — kept for when the grader is wired to it."""
 
     # --- branch / worker env contract ---
     branch_prefix: str = "feat/oxison-"
+    # The OXISON_* worker-env-contract names below are the *planned* contract for
+    # passing task context into the worker; not yet injected into the worker env.
     env_task_id: str = "OXISON_TASK_ID"
     env_branch: str = "OXISON_BRANCH"
     env_worktree: str = "OXISON_WORKTREE"
-    env_heartbeat_path: str = "OXISON_HEARTBEAT_PATH"
 
     # --- worker bounding (C3 / M1) ---
     worker_max_budget_usd: float = 5.0
