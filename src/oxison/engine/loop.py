@@ -233,16 +233,20 @@ async def run_build_loop(
             live_ids = {t.id for t in store.inflight_tasks()}
             eligible = _eligible(store, options, merged_ids)
             cache = (merged_ids, counts, live_ids, eligible)
+            # L4 — sweep stale locks whose holder is dead (TTL-expired). The live
+            # set is the currently in-flight tasks; anything else holding an old
+            # lock is an orphan and is reclaimed so it can't block forever. Done
+            # only on a cache refresh (a state-change tick): new orphans only
+            # appear when a task dispatches, which is itself a state change — so a
+            # blocked LP2 no-progress spin no longer scans the lock table every
+            # 20 ms (M3, the unaddressed half of M5).
+            store.locks_expire(
+                now_epoch=now_epoch_fn(), ttl_seconds=options.lock_ttl_seconds,
+                live_task_ids=live_ids,
+            )
         else:
             merged_ids, counts, live_ids, eligible = cache
 
-        # L4 — sweep stale locks whose holder is dead (TTL-expired). The live
-        # set is the currently in-flight tasks; anything else holding an old
-        # lock is an orphan and is reclaimed so it can't block forever.
-        store.locks_expire(
-            now_epoch=now_epoch_fn(), ttl_seconds=options.lock_ttl_seconds,
-            live_task_ids=live_ids,
-        )
         # Completion is "no task is planned/planning at all" — checked via status
         # counts (NOT find_next_planned, which also excludes cap-exhausted tasks
         # and would falsely report COMPLETE while they remain). Planned tasks

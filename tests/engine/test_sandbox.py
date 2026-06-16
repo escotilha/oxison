@@ -58,6 +58,14 @@ def test_denyread_covers_credentials(tmp_path):
         assert f"/home/u/{rel}" in dr
 
 
+def test_denyread_covers_oxisons_own_keys(tmp_path):
+    # M1 (re-audit): oxison's own saved provider keys must be in the deny-list so
+    # a prompt-injected worker can't read & exfiltrate them.
+    assert ".config/oxison" in DEFAULT_CRED_DENY
+    s, _, _ = _settings(tmp_path)
+    assert "/home/u/.config/oxison" in s["filesystem"]["denyRead"]
+
+
 def test_settings_has_all_four_required_keys(tmp_path):
     # srt 1.0 rejects a config missing any of these (falls back to deny-all).
     s, _, _ = _settings(tmp_path)

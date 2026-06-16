@@ -98,6 +98,8 @@ def test_host_is_blocked_for_internal_targets():
     assert _host_is_blocked("10.0.0.1")           # RFC-1918
     assert _host_is_blocked("192.168.1.10")       # RFC-1918
     assert _host_is_blocked("::1")                # IPv6 loopback
+    assert _host_is_blocked("::ffff:127.0.0.1")   # IPv4-mapped loopback (CAND-2)
+    assert _host_is_blocked("::ffff:169.254.169.254")  # IPv4-mapped metadata
     assert _host_is_blocked("")                   # fail-closed
     assert _host_is_blocked(None)
 

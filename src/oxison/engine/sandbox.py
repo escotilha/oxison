@@ -57,6 +57,9 @@ DEFAULT_CRED_DENY: tuple[str, ...] = (
     ".config/gh",
     ".netrc",
     ".config/git/credentials",
+    # oxison's OWN saved provider keys (credentials.py file backend) — a
+    # prompt-injected worker must not be able to read and exfiltrate them.
+    ".config/oxison",
 )
 
 
