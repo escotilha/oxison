@@ -133,3 +133,51 @@ def test_render_depends_on_shows_titles_not_ids():
     # the depends-on line must not leak the opaque identifier
     dep_line = md.split("**Depends on:**")[1].splitlines()[0]
     assert "oxpz-" not in dep_line
+
+
+# ---------------------------------------------------------------------------
+# relevance — the planner self-assessment + its defensive coercion / render.
+# ---------------------------------------------------------------------------
+
+
+def test_relevance_defaults_to_one_when_absent():
+    # An older planner that doesn't emit `relevance` must be unaffected (1.0).
+    raw = {"tasks": [{"title": "x", "kind": "fix", "acceptance": ["ok"]}]}
+    doc = build_roadmap_doc(raw=raw, source=_src(), generated_at="t")
+    assert doc.tasks[0].relevance == 1.0
+
+
+def test_relevance_parsed_and_clamped():
+    raw = {
+        "tasks": [
+            {"title": "a", "kind": "fix", "acceptance": ["x"], "relevance": 0.3},
+            {"title": "b", "kind": "fix", "acceptance": ["x"], "relevance": "0.7"},
+            {"title": "c", "kind": "fix", "acceptance": ["x"], "relevance": 5},
+            {"title": "d", "kind": "fix", "acceptance": ["x"], "relevance": -2},
+            {"title": "e", "kind": "fix", "acceptance": ["x"], "relevance": "nonsense"},
+            {"title": "f", "kind": "fix", "acceptance": ["x"], "relevance": True},
+        ]
+    }
+    doc = build_roadmap_doc(raw=raw, source=_src(), generated_at="t")
+    rel = {t.title: t.relevance for t in doc.tasks}
+    assert rel["a"] == 0.3
+    assert rel["b"] == 0.7        # numeric string parsed
+    assert rel["c"] == 1.0        # clamped down
+    assert rel["d"] == 0.0        # clamped up
+    assert rel["e"] == 1.0        # invalid string -> default
+    assert rel["f"] == 1.0        # bool treated as missing -> default
+
+
+def test_render_surfaces_below_default_relevance_only():
+    raw = {
+        "tasks": [
+            {"title": "Core", "kind": "feature", "priority": 1,
+             "acceptance": ["a"], "relevance": 1.0},
+            {"title": "Marginal", "kind": "feature", "priority": 2,
+             "acceptance": ["b"], "relevance": 0.4},
+        ]
+    }
+    doc = build_roadmap_doc(raw=raw, source=_src(), generated_at="t")
+    md = render_roadmap_md(doc)
+    assert "relevance 0.40" in md          # the kept-but-marginal task is tagged
+    assert "relevance 1.00" not in md      # a default-relevance task is not

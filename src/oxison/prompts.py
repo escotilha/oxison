@@ -395,7 +395,9 @@ _PLANNER_JSON_CONTRACT = (
     '"],\n'
     '      "depends_on": ["the exact TITLE of a prerequisite task in this list"],\n'
     '      "estimated_effort": "S | M | L",\n'
-    '      "files_hint": ["likely paths to touch — a hint, never a CI/.env/.git path"]\n'
+    '      "files_hint": ["likely paths to touch — a hint, never a CI/.env/.git path"],\n'
+    '      "relevance": 0.9                     // 0.0-1.0: how directly this '
+    "serves the product's stated core intent\n"
     "    }\n"
     "  ]\n"
     "}\n"
@@ -407,6 +409,11 @@ _PLANNER_JSON_CONTRACT = (
     "  .git/, lockfiles, oxison-build/).\n"
     "- Keep the roadmap focused (a few well-scoped tasks beat dozens of vague\n"
     "  ones). Sequence by dependency and put the highest-leverage work first.\n"
+    "- Score each task's `relevance` honestly in [0.0, 1.0]: 1.0 = core to the\n"
+    "  product's stated intent; ~0.3-0.6 = useful but secondary; below 0.25 =\n"
+    "  speculative / gold-plating that the engine will PRUNE before building.\n"
+    "  Do not inflate scores to smuggle pet features past the filter — an honest\n"
+    "  low score is how you flag work that can wait.\n"
 )
 
 

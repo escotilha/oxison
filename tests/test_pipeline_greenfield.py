@@ -59,7 +59,8 @@ def test_greenfield_pipeline_writes_all_artifacts(
         return [GeneratedArtifact(step="product", filename="PRODUCT.md", path=path, cost_usd=0.2)]
 
     async def fake_plan(
-        cfg_, comprehension, *, generated_at, user_guidance="", max_tasks=40, greenfield=False
+        cfg_, comprehension, *, generated_at, user_guidance="", max_tasks=40,
+        relevance_min_score=0.25, greenfield=False
     ):
         assert greenfield is True
         return _fake_plan_result()

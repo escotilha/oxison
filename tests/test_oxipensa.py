@@ -175,6 +175,52 @@ async def test_open_questions_deduped(tmp_path, monkeypatch):
     assert result.doc.open_questions.count("Should it sync to the cloud?") == 1
 
 
+def _mixed_relevance_roadmap_json() -> str:
+    # One core task and one speculative low-relevance task.
+    return json.dumps(
+        {
+            "summary": "Ship core, defer fluff",
+            "open_questions": [],
+            "tasks": [
+                {"title": "Add cloud sync", "kind": "feature", "priority": 1,
+                 "acceptance": ["todos persist across devices"], "relevance": 0.95},
+                {"title": "Add holiday theme", "kind": "feature", "priority": 5,
+                 "acceptance": ["a festive theme is selectable"], "relevance": 0.05},
+            ],
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_prunes_low_relevance_task(tmp_path, monkeypatch):
+    fake = _FakeInvoker([(True, _mixed_relevance_roadmap_json())])
+    monkeypatch.setattr(oxipensa, "invoke", fake)
+    result = await plan(_cfg(tmp_path), _comprehension(), generated_at="t")
+    titles = [t.title for t in result.doc.tasks]
+    assert titles == ["Add cloud sync"]            # core kept
+    assert [t.title for t in result.pruned] == ["Add holiday theme"]  # fluff pruned
+
+
+@pytest.mark.asyncio
+async def test_plan_pruned_empty_when_nothing_below_floor(tmp_path, monkeypatch):
+    # The default roadmap omits relevance -> all default to 1.0 -> nothing pruned.
+    fake = _FakeInvoker([(True, _good_roadmap_json())])
+    monkeypatch.setattr(oxipensa, "invoke", fake)
+    result = await plan(_cfg(tmp_path), _comprehension(), generated_at="t")
+    assert result.pruned == []
+
+
+@pytest.mark.asyncio
+async def test_plan_relevance_optout_keeps_all(tmp_path, monkeypatch):
+    fake = _FakeInvoker([(True, _mixed_relevance_roadmap_json())])
+    monkeypatch.setattr(oxipensa, "invoke", fake)
+    result = await plan(
+        _cfg(tmp_path), _comprehension(), generated_at="t", relevance_min_score=0.0
+    )
+    assert {t.title for t in result.doc.tasks} == {"Add cloud sync", "Add holiday theme"}
+    assert result.pruned == []
+
+
 def test_load_comprehension_from_file(tmp_path):
     p = tmp_path / "comprehension.json"
     p.write_text(json.dumps(_comprehension()), encoding="utf-8")

@@ -44,10 +44,11 @@ def test_ideate_dispatches_with_brief(tmp_path: Path, monkeypatch) -> None:
     _patch_preflight(monkeypatch)
     captured = {}
 
-    async def fake_greenfield(cfg, *, user_guidance="", max_tasks=40):
+    async def fake_greenfield(cfg, *, user_guidance="", max_tasks=40, relevance_min_score=0.25):
         captured["brief"] = cfg.brief
         captured["urls"] = cfg.urls
         captured["max_tasks"] = max_tasks
+        captured["relevance_min_score"] = relevance_min_score
         return 0
 
     monkeypatch.setattr(pipeline, "greenfield_pipeline", fake_greenfield)
@@ -61,6 +62,7 @@ def test_ideate_dispatches_with_brief(tmp_path: Path, monkeypatch) -> None:
     assert captured["brief"] == "build a todo app"
     assert captured["urls"] == ["https://x.com"]
     assert captured["max_tasks"] == 7
+    assert captured["relevance_min_score"] == 0.25  # flag default threads through
 
 
 def test_ideate_reads_brief_file(tmp_path: Path, monkeypatch) -> None:
@@ -69,7 +71,7 @@ def test_ideate_reads_brief_file(tmp_path: Path, monkeypatch) -> None:
     bf.write_text("  idea from file  ", encoding="utf-8")
     seen = {}
 
-    async def fake_greenfield(cfg, *, user_guidance="", max_tasks=40):
+    async def fake_greenfield(cfg, *, user_guidance="", max_tasks=40, relevance_min_score=0.25):
         seen["brief"] = cfg.brief
         return 0
 

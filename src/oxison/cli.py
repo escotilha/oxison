@@ -160,6 +160,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="plan-gate scope fence: reject a roadmap with more tasks (default: 40)",
     )
     plan_p.add_argument(
+        "--relevance-min-score",
+        type=float,
+        default=0.25,
+        help="prune tasks the planner self-scored below this relevance floor "
+             "(0.0-1.0, default: 0.25); pass 0 to keep every task",
+    )
+    plan_p.add_argument(
         "--bare",
         action="store_true",
         help="use --bare auth (ANTHROPIC_API_KEY) instead of your Claude Code login",
@@ -222,6 +229,11 @@ def build_parser() -> argparse.ArgumentParser:
     ideate_p.add_argument(
         "--max-tasks", type=int, default=40,
         help="plan-gate scope fence: reject a roadmap with more tasks (default: 40)",
+    )
+    ideate_p.add_argument(
+        "--relevance-min-score", type=float, default=0.25,
+        help="prune tasks the planner self-scored below this relevance floor "
+             "(0.0-1.0, default: 0.25); pass 0 to keep every task",
     )
     ideate_p.add_argument(
         "--bare", action="store_true",
@@ -571,6 +583,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 generated_at=_now_iso(),
                 user_guidance=user_guidance,
                 max_tasks=args.max_tasks,
+                relevance_min_score=args.relevance_min_score,
             )
         )
     except PlanError as exc:
@@ -591,6 +604,13 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
     note = "" if result.attempts == 1 else f" (after {result.attempts} attempts)"
     print(f"  ✓ {len(result.doc.tasks)} tasks planned{note} — ${result.cost_usd:.4f}")
+    if result.pruned:
+        print(
+            f"  ⤵ {len(result.pruned)} low-relevance task(s) pruned "
+            "(speculative / off-target):"
+        )
+        for task in result.pruned:
+            print(f"      · {task.title}  (relevance {task.relevance:.2f})")
     print(f"  ✓ {ROADMAP_JSON_FILENAME}")
     print(f"  ✓ {ROADMAP_MD_FILENAME}")
     print()
@@ -678,7 +698,12 @@ def cmd_ideate(args: argparse.Namespace) -> int:
     print()
 
     return asyncio.run(
-        greenfield_pipeline(cfg, user_guidance=user_guidance, max_tasks=args.max_tasks)
+        greenfield_pipeline(
+            cfg,
+            user_guidance=user_guidance,
+            max_tasks=args.max_tasks,
+            relevance_min_score=args.relevance_min_score,
+        )
     )
 
 

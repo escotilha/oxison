@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from oxison.oxipensa_gate import gate_roadmap
+from oxison.oxipensa_gate import (
+    DEFAULT_RELEVANCE_MIN_SCORE,
+    filter_by_relevance,
+    gate_roadmap,
+)
 from oxison.roadmap_doc import RoadmapDoc, RoadmapTask, build_roadmap_doc
 
 
@@ -192,3 +196,94 @@ def test_too_many_tasks_fails():
 def test_feedback_is_bulleted():
     res = gate_roadmap(_doc({"tasks": []}))
     assert res.feedback().startswith("- ")
+
+
+# ---------------------------------------------------------------------------
+# filter_by_relevance — the plan-boundary relevance gate.
+# ---------------------------------------------------------------------------
+
+
+def _task(ident, relevance, *, depends_on=()):
+    return RoadmapTask(
+        identifier=ident, title=ident, kind="feature", priority=1, rationale="",
+        acceptance=["x"], depends_on=list(depends_on), relevance=relevance,
+    )
+
+
+def _relevance_doc(tasks):
+    return RoadmapDoc(schema_version="1.0", generated_at="t", source=_src(),
+                      summary="", open_questions=[], tasks=tasks)
+
+
+def test_filter_drops_below_floor():
+    doc = _relevance_doc([_task("a", 0.9), _task("b", 0.1)])
+    filtered, pruned = filter_by_relevance(doc)
+    assert [t.identifier for t in filtered.tasks] == ["a"]
+    assert [t.identifier for t in pruned] == ["b"]
+
+
+def test_filter_preserves_order():
+    doc = _relevance_doc([_task("a", 0.9), _task("b", 0.1), _task("c", 0.8)])
+    filtered, _ = filter_by_relevance(doc)
+    assert [t.identifier for t in filtered.tasks] == ["a", "c"]
+
+
+def test_filter_transitive_keep_saves_depended_on_task():
+    # 'b' is below the floor but a kept 'a' depends on it -> 'b' survives so the
+    # filtered doc never carries a dangling dependency the gate would reject.
+    doc = _relevance_doc([_task("a", 0.9, depends_on=["b"]), _task("b", 0.1)])
+    filtered, pruned = filter_by_relevance(doc)
+    assert {t.identifier for t in filtered.tasks} == {"a", "b"}
+    assert pruned == []
+
+
+def test_filter_transitive_keep_is_recursive():
+    # a (kept) -> b (low) -> c (low): both b and c are pulled back in.
+    doc = _relevance_doc([
+        _task("a", 0.9, depends_on=["b"]),
+        _task("b", 0.1, depends_on=["c"]),
+        _task("c", 0.05),
+    ])
+    filtered, pruned = filter_by_relevance(doc)
+    assert {t.identifier for t in filtered.tasks} == {"a", "b", "c"}
+    assert pruned == []
+
+
+def test_filter_noop_when_all_default_relevance():
+    tasks = [_task("a", 1.0), _task("b", 1.0)]
+    doc = _relevance_doc(tasks)
+    filtered, pruned = filter_by_relevance(doc)
+    # Identity no-op: same object back, empty pruned list.
+    assert filtered is doc
+    assert pruned == []
+
+
+def test_filter_optout_when_min_score_non_positive():
+    doc = _relevance_doc([_task("a", 0.0), _task("b", 0.0)])
+    filtered, pruned = filter_by_relevance(doc, min_score=0.0)
+    assert filtered is doc
+    assert pruned == []
+
+
+def test_filter_floor_is_inclusive():
+    # A task exactly at the floor is kept (>= , not >).
+    doc = _relevance_doc([_task("a", DEFAULT_RELEVANCE_MIN_SCORE)])
+    filtered, pruned = filter_by_relevance(doc)
+    assert [t.identifier for t in filtered.tasks] == ["a"]
+    assert pruned == []
+
+
+def test_filtered_doc_still_passes_the_gate():
+    # The end-to-end invariant: pruning never produces a gate-rejectable roadmap.
+    raw = {
+        "tasks": [
+            {"title": "Core", "kind": "feature", "priority": 1,
+             "acceptance": ["works"], "relevance": 0.9},
+            {"title": "Gold plating", "kind": "feature", "priority": 2,
+             "acceptance": ["works"], "relevance": 0.05},
+        ],
+    }
+    doc = _doc(raw)
+    filtered, pruned = filter_by_relevance(doc)
+    assert len(pruned) == 1 and pruned[0].title == "Gold plating"
+    assert gate_roadmap(filtered).ok

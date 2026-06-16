@@ -74,6 +74,15 @@ class RoadmapTask:
     depends_on: list[str] = field(default_factory=list)
     estimated_effort: str = "M"
     files_hint: list[str] = field(default_factory=list)
+    #: How directly this task serves the product's stated core intent, in
+    #: ``[0, 1]`` — the planner's self-assessment (1.0 = core; low = speculative
+    #: / gold-plating). The plan-boundary relevance filter
+    #: (:func:`oxison.oxipensa_gate.filter_by_relevance`) prunes tasks below a
+    #: floor so a roadmap doesn't carry speculative work into the build. Absent
+    #: in the model output -> defaults to ``1.0`` (don't penalize, like the
+    #: memory subsystem's "unknown recency -> 1.0" rule), so an older planner
+    #: that doesn't emit it is unaffected.
+    relevance: float = 1.0
 
 
 @dataclass
@@ -133,6 +142,31 @@ def _as_int(value: Any, default: int) -> int:
     return default
 
 
+def _as_float_01(value: Any, default: float) -> float:
+    """Coerce to a float clamped to ``[0, 1]``; missing/invalid -> ``default``.
+
+    A defensive shape-normalizer (same role as :func:`_as_int`): a typo'd or
+    out-of-range ``relevance`` becomes a clean in-range value the relevance
+    filter can act on, never a crash.
+    """
+    if isinstance(value, bool):  # bool is an int subclass — treat as missing
+        return default
+    if isinstance(value, (int, float)):
+        f = float(value)
+    elif isinstance(value, str):
+        try:
+            f = float(value.strip())
+        except ValueError:
+            return default
+    else:
+        return default
+    if f < 0.0:
+        return 0.0
+    if f > 1.0:
+        return 1.0
+    return f
+
+
 def _coerce_task(raw: Any) -> RoadmapTask | None:
     """Coerce one raw task dict into a ``RoadmapTask`` (identifier computed).
 
@@ -159,6 +193,7 @@ def _coerce_task(raw: Any) -> RoadmapTask | None:
         depends_on=_as_str_list(raw.get("depends_on")),  # titles, for now
         estimated_effort=effort,
         files_hint=_as_str_list(raw.get("files_hint")),
+        relevance=_as_float_01(raw.get("relevance"), 1.0),
     )
 
 
@@ -238,6 +273,10 @@ def render_roadmap_md(doc: RoadmapDoc) -> str:
         lines.append(header)
         lines.append("")
         tags = f"priority {task.priority} · {task.kind or '?'} · effort {task.estimated_effort}"
+        # Surface a below-default relevance so a kept-but-marginal task is
+        # visible in the human roadmap (default 1.0 renders unchanged).
+        if task.relevance < 1.0:
+            tags += f" · relevance {task.relevance:.2f}"
         lines.append(f"_{tags}_")
         lines.append("")
         if task.rationale:
