@@ -83,7 +83,9 @@ def build_worker_prompt(task_title: str, *, rationale: str, acceptance: list[str
     hints = ", ".join(_fence_safe(f) for f in files_hint) if files_hint else "(use your judgment)"
     task_title = _fence_safe(task_title)
     rationale = _fence_safe(rationale)
-    repo_name = _fence_safe(repo_name)
+    # repo_name lands in the pre-fence role preamble, so also collapse newlines —
+    # the fence can't protect a field interpolated before it opens (N1).
+    repo_name = _fence_safe(repo_name).replace("\n", " ").replace("\r", " ")
     return (
         "You are an Oxfaz build worker implementing ONE task in a git worktree "
         f"of the project `{repo_name}`. You have full read/write tools.\n\n"
@@ -305,10 +307,12 @@ async def launch_worker(
             adapter_failure=True, error=f"worker binary not found: {exc}",
             log_path=str(log_path),
         )
+    finally:
+        # Redact any credential the worker surfaced into its log (M6/CWE-532) on
+        # EVERY exit path — in finally so an unexpected exception can't leave the
+        # key in the persisted log (fail-soft on a missing log).
+        redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
 
-    # Redact any credential the worker may have surfaced into its log (M6/CWE-532)
-    # before we read it for cost or persist it.
-    redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
     exit_code = proc.returncode
     changed = await changed_files(worktree, base_sha)
     cost = engine_config.worker_max_budget_usd if timed_out else extract_cost_from_log(log_path)

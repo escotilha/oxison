@@ -6,6 +6,12 @@
 - **`.gnupg` is now read-denied to the sandboxed build worker** (v0.5.0 CTO swarm).
   It was write-protected but readable, so a prompt-injected worker could read GPG
   private keys; now in `DEFAULT_CRED_DENY` alongside `.ssh`.
+- **Worker-log secret redaction now runs in `finally`** (C-N2) — on every exit
+  path (including an unexpected exception), so a credential can't be left in the
+  persisted log. Applied to both Layer-1 and Layer-2 workers.
+- **`repo_name` newlines are collapsed in the worker-prompt preamble** (N1) — it's
+  interpolated before the `<task_data>` fence opens, so the fence can't protect it;
+  collapsing newlines stops a crafted repo name injecting into the role framing.
 
 ### Internal
 - Added isolation tests for `extract_cost_from_log` (the C3 budget-floor path) —
