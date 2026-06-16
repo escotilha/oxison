@@ -20,6 +20,13 @@
   re-runs them every 20 ms (~250 q/s → ~0 while blocked).
 
 ### Security
+- **Layer-2 container egress narrowed to the allowlist (#14).** The rootless-
+  container sandbox now runs the worker under srt *inside* the container (image
+  gains `bubblewrap`/`socat`/srt), confining its network egress to the same
+  domain allowlist as Layer-1 — it previously kept the podman default (open)
+  egress. srt settings are bind-mounted read-only. On the macOS podman VM (which
+  can't nest bwrap's bind-mount of the volume) the wrap is skipped with a warning
+  — no regression; egress narrowing applies on Linux, where Layer-2 deploys.
 - **Build-worker prompt-injection hardening (#13).** Untrusted task fields
   (roadmap/web-derived) are now enclosed in a `<task_data>` fence labelled
   data-not-instructions, with the oxison Rules as the worker's only authority;

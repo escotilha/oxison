@@ -29,6 +29,7 @@ import os
 import platform
 import shutil
 import signal
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -45,6 +46,18 @@ from .dispatch import (
 )
 from .engconfig import EngineConfig
 from .invoke import ToolSet, build_argv, build_env, kill_process_group
+from .sandbox import (
+    DEFAULT_SANDBOX_DOMAINS,
+    build_srt_settings,
+    srt_wrap,
+    write_srt_settings,
+)
+
+#: Container-internal paths (the worker's view): the clone is bind-mounted at
+#: /work, and the srt settings file is bind-mounted read-only at this path.
+_CONTAINER_WORK = Path("/work")
+_CONTAINER_HOME = Path("/home/worker")
+_CONTAINER_SRT_SETTINGS = Path("/srt/settings.json")
 
 #: Container runtimes we support, in preference order (rootless first).
 _RUNTIMES = ("podman", "docker")
@@ -79,17 +92,19 @@ def build_run_argv(
     inner_argv: Sequence[str],
     api_key_env: str = _API_KEY_ENV,
     extra_env_names: Sequence[str] = (),
+    srt_settings_host: Path | None = None,
     name: str | None = None,
 ) -> list[str]:
     """Build the ``podman run`` argv that runs the worker in the container.
 
     Containment knobs:
-    - ``--rm`` ephemeral; ``--network`` left at the rootless default so the
-      worker can reach the Anthropic API + registries (egress narrowing is a
-      Layer-2 follow-up — the filesystem boundary is the headline win here).
-    - the ONLY mount is ``workspace -> /work`` (rw); nothing else from the host
-      is visible. ``--cap-drop ALL`` + ``--security-opt no-new-privileges`` drop
-      ambient privilege.
+    - ``--rm`` ephemeral; ``--cap-drop ALL`` + ``--security-opt no-new-privileges``
+      drop ambient privilege.
+    - ``workspace -> /work`` (rw) is the worker's only writable mount; nothing
+      else from the host is visible.
+    - ``srt_settings_host`` (when set) is bind-mounted **read-only** at
+      ``/srt/settings.json`` so the in-container srt wrapper can narrow egress to
+      the domain allowlist (M1). The inner argv is srt-wrapped by the caller.
     - ``-e <api_key_env>`` forwards the value from the runtime's own env (the key
       is referenced by name, never placed in argv). ``-e NAME`` with no ``=value``
       is a no-op when ``NAME`` is unset, so forwarding the Anthropic key name is
@@ -109,6 +124,8 @@ def build_run_argv(
         "-w", "/work",
         "-e", api_key_env,
     ]
+    if srt_settings_host is not None:
+        argv += ["-v", f"{srt_settings_host.resolve()}:{_CONTAINER_SRT_SETTINGS}:ro"]
     for env_name in extra_env_names:
         argv += ["-e", env_name]
     argv += [image, *inner_argv]
@@ -236,12 +253,44 @@ async def launch_worker_container(
         max_budget_usd=engine_config.worker_max_budget_usd,
         session_id=generate_session_id(),
     )
+
+    # M1 — narrow container egress to the domain allowlist by running the worker
+    # under srt *inside* the container (its filesystem boundary is already the
+    # mount; this adds the network axis srt enforces on Layer-1). srt needs
+    # bubblewrap, which on the macOS podman VM can't nest a bind-mount of the
+    # `-v` volume (a VM-overlay limitation, not present on a native Linux host
+    # where Layer-2 deploys) — so we skip the wrap there to avoid breaking the
+    # container path, keeping today's behavior with a loud warning.
+    srt_settings_host: Path | None = None
+    if platform.system() == "Darwin":
+        print(
+            "oxison: WARNING — container egress is NOT narrowed on macOS (the "
+            "podman VM can't nest the srt sandbox); egress stays at the podman "
+            "default. Run Layer-2 on Linux for egress control, or use "
+            "--sandbox-layer srt.",
+            file=sys.stderr,
+        )
+    else:
+        domains = engine_config.sandbox_allowed_domains or DEFAULT_SANDBOX_DOMAINS
+        settings = build_srt_settings(
+            worktree=_CONTAINER_WORK, repo=_CONTAINER_WORK,
+            task_identifier=task_identifier, home=_CONTAINER_HOME,
+            # /tmp is the *container's* scratch dir (an allowWrite path inside the
+            # sandbox), not a host temp file — S108/B108 don't apply here.
+            allowed_domains=domains, tmpdir="/tmp",  # noqa: S108  # nosec B108
+        )
+        srt_settings_host = log_path.parent / f"{task_identifier}.container.srt.json"
+        write_srt_settings(srt_settings_host, settings)
+        # srt runs from PATH inside the image; settings are at the read-only mount.
+        inner_argv = srt_wrap("srt", _CONTAINER_SRT_SETTINGS, list(inner_argv))
+
     container_name = f"oxfaz-{task_identifier}"
     # Remove any stale container from a prior attempt (deterministic name).
     await remove_container(runtime, container_name)
     argv = build_run_argv(
         runtime=runtime, image=image, workspace=clone_dir,
         inner_argv=inner_argv, name=container_name,
+        srt_settings_host=srt_settings_host,
         # In provider mode, forward the overlay var names so the in-VM worker
         # gets ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN (+ knobs) too.
         extra_env_names=[k for k, _ in engine_config.provider_env],

@@ -11,13 +11,17 @@ FROM node:22-slim
 
 # git: the worker commits its work. ca-certificates: TLS to the Anthropic API +
 # package registries. ripgrep: claude's search tool. tini: clean PID-1 reaping.
+# bubblewrap + socat: srt's sandbox deps — srt runs the worker under an
+# in-container egress allowlist (Layer-2 network narrowing, M1), the same
+# allowlist Layer-1 enforces on the host.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        git ca-certificates ripgrep tini \
+        git ca-certificates ripgrep tini bubblewrap socat \
     && rm -rf /var/lib/apt/lists/*
 
-# The Claude Code CLI (the worker binary).
-RUN npm install -g @anthropic-ai/claude-code \
+# The Claude Code CLI (the worker binary) + the sandbox runtime (srt), which
+# narrows the worker's network egress to the domain allowlist from inside.
+RUN npm install -g @anthropic-ai/claude-code @anthropic-ai/sandbox-runtime \
     && claude --version
 
 # Run as an unprivileged user with a real HOME (claude writes session state).
