@@ -20,9 +20,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .dispatch import DispatchOutcome
 from .gitutil import git_cmd
 from .taskstore import Task
+from .types import DispatchOutcome
 
 Integrator = Callable[[Task, DispatchOutcome], Awaitable["MergeOutcome"]]
 

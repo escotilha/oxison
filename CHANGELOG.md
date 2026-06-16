@@ -21,15 +21,22 @@
   in-container srt; macOS keeps default egress with a warning) (M2).
 
 ### Internal
-- **Code-health pass (#18, partial).** Lifted the shared git/log helpers
+- **Code-health pass (#18).** Lifted the shared git/log helpers
   (`git_cmd`/`changed_files`/`extract_cost_from_log`/`parse_changed_files`) out of
   `engine/dispatch.py` into a public `engine/gitutil.py` (no more cross-module
   private imports from `integrate.py`/`container.py`); added a compound
   `(status, priority, id)` index serving `find_next_planned`; dropped a dead
   `AND merged_at IS NULL` predicate in `inflight_tasks`; removed an unused
-  `urllib.error` import. (Remaining #18 items — memory `put()` single-transaction,
-  container clone cleanup, `cli.py` split + tests, memory full-table-scan — stay
-  tracked in the issue.)
+  `urllib.error` import.
+- **Code-health pass #2 (#18 closeout).** `memory.put()` is now a single
+  transaction (~5 commits → 1; L4/M5); `memory.prune()` drops the per-key `get()`
+  SELECT via a subquery (CAND-3); `DispatchOutcome` moved to `engine/types.py` so
+  `integrate.py` no longer pulls the dispatch module (L3); removed 7 dead
+  `EngineConfig` fields (grader/CI/auto-merge/heartbeat, all unwired) (L4); added
+  direct `gitutil` tests (CAND-4). (Deliberately left in #18: `vector_rank`'s
+  static-SQL full-scan — a conscious no-dynamic-SQL tradeoff, fine at scale (M4);
+  and worktree/clone disk retention — kept as the audit trail / needed by
+  `--integrate`, needs a retention-policy decision (L1).)
 
 ### Fixed
 - **Loop reconciles a stranded `planning` task on startup (#15).** A task left in

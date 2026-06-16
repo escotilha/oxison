@@ -290,7 +290,9 @@ class MemoryStore:
         arr.frombytes(blob)
         return list(arr)
 
-    def _embed_and_store(self, memory_id: int, purpose: str, truth: str) -> None:
+    def _embed_and_store(
+        self, memory_id: int, purpose: str, truth: str, *, commit: bool = True
+    ) -> None:
         if self._embedder is None:
             return
         try:
@@ -304,7 +306,8 @@ class MemoryStore:
             "INSERT OR REPLACE INTO memory_vec (memory_id, dim, vec) VALUES (?, ?, ?)",
             (memory_id, len(vec), self._pack(vec)),
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
     # -- write -----------------------------------------------------------
     def put(
@@ -356,15 +359,23 @@ class MemoryStore:
             (key, tier, scope, task_kind, purpose, truth, trig, anch, prov,
              int(verified), pain, importance, now, now),
         )
-        self._conn.commit()
+        # M5: one transaction for the whole write (upsert + fts + vec + timeline)
+        # instead of ~5 separate commits. The re-SELECT sees the uncommitted
+        # upsert on this connection; the helpers defer their commit to the single
+        # commit below (kept the cheap indexed SELECT over RETURNING for SQLite
+        # version portability).
         row = self._conn.execute("SELECT id FROM memory WHERE key = ?", (key,)).fetchone()
         memory_id = int(row["id"]) if row else 0
-        self._sync_fts(key, purpose, truth, trig, anch)
-        self._embed_and_store(memory_id, purpose, truth)
-        self._append_timeline(key, now=now, source=source, note=note)
+        self._sync_fts(key, purpose, truth, trig, anch, commit=False)
+        self._embed_and_store(memory_id, purpose, truth, commit=False)
+        self._append_timeline(key, now=now, source=source, note=note, commit=False)
+        self._conn.commit()
         return key
 
-    def _sync_fts(self, key: str, purpose: str, truth: str, triggers: str, anchors: str) -> None:
+    def _sync_fts(
+        self, key: str, purpose: str, truth: str, triggers: str, anchors: str,
+        *, commit: bool = True,
+    ) -> None:
         if not self.fts:
             return
         self._conn.execute("DELETE FROM memory_fts WHERE key = ?", (key,))
@@ -373,14 +384,18 @@ class MemoryStore:
             "VALUES (?,?,?,?,?)",
             (key, purpose, truth, triggers, anchors),
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
-    def _append_timeline(self, key: str, *, now: str, source: str, note: str) -> None:
+    def _append_timeline(
+        self, key: str, *, now: str, source: str, note: str, commit: bool = True
+    ) -> None:
         self._conn.execute(
             "INSERT INTO memory_timeline (memory_key, at, source, note) VALUES (?,?,?,?)",
             (key, now, source, note),
         )
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
 
     def add_edge(
         self, src: str, dst: str, kind: str = EDGE_RELATED, *, weight: float = 1.0
@@ -564,11 +579,17 @@ class MemoryStore:
         ``retrieve``/maintenance callers; this is the mechanical delete."""
         n = 0
         for key in keys:
-            rec = self.get(key)
-            if rec is None:
-                continue
-            self._conn.execute("DELETE FROM memory_vec WHERE memory_id = ?", (rec.id,))
-            self._conn.execute("DELETE FROM memory WHERE key = ?", (key,))
+            # Delete the vector via a subquery on the key (CAND-3) — avoids a full
+            # `get()` SELECT per key just to resolve memory_id. Order matters: the
+            # vec subquery must run before the memory row is deleted.
+            self._conn.execute(
+                "DELETE FROM memory_vec WHERE memory_id IN "
+                "(SELECT id FROM memory WHERE key = ?)",
+                (key,),
+            )
+            cur = self._conn.execute("DELETE FROM memory WHERE key = ?", (key,))
+            if cur.rowcount == 0:
+                continue  # key didn't exist — nothing else to clean
             self._conn.execute("DELETE FROM memory_timeline WHERE memory_key = ?", (key,))
             self._conn.execute("DELETE FROM memory_edge WHERE src = ? OR dst = ?", (key, key))
             if self.fts:
