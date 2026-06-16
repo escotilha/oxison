@@ -203,6 +203,7 @@ async def launch_worker_container(
     clone_root: Path,
     log_path: Path,
     timeout_s: float = DEFAULT_WORKER_TIMEOUT_S,
+    memory_block: str = "",
 ) -> DispatchOutcome:
     """Run one build worker inside a container; return the outcome.
 
@@ -245,7 +246,7 @@ async def launch_worker_container(
 
     prompt = build_worker_prompt(
         task_title, rationale=rationale, acceptance=acceptance,
-        files_hint=files_hint, repo_name=repo.name,
+        files_hint=files_hint, repo_name=repo.name, memory_block=memory_block,
     )
     inner_argv = build_argv(
         prompt, tool_set=ToolSet.FULL_WRITE, auth_mode="bare", model=model,

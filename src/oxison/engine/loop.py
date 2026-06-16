@@ -26,6 +26,7 @@ launch and diff grading are pluggable.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -36,6 +37,11 @@ from .taskstore import STATUS_PLANNED, STATUS_PLANNING, Task, TaskStore
 
 Dispatcher = Callable[[Task, str], Awaitable[DispatchOutcome]]
 Grader = Callable[[DispatchOutcome], GradeVerdict]
+#: Injected outcome sink (cross-run memory capture). Called once per GRADED task
+#: with ``(task, outcome, verdict, merged)``; never on adapter/worker failure
+#: (no verdict). The loop stays memory-agnostic — it imports nothing from
+#: ``memory/`` and never inspects what the recorder does.
+Recorder = Callable[[Task, DispatchOutcome, GradeVerdict, bool], None]
 NowFn = Callable[[], str]
 NowEpochFn = Callable[[], float]
 
@@ -114,6 +120,7 @@ async def run_build_loop(
     now_fn: NowFn,
     now_epoch_fn: NowEpochFn,
     integrator: Integrator | None = None,
+    recorder: Recorder | None = None,
 ) -> LoopSummary:
     """Drive the build loop to a halt. Returns a summary of what happened.
 
@@ -187,23 +194,36 @@ async def run_build_loop(
                                   failure_class="worker")
                 return _TaskRun(charged=charged, failed=True, progressed=True)
             verdict = grader(outcome)
+
+            def record(*, merged: bool) -> None:
+                # Capture this graded outcome into cross-run memory. Fail-soft: a
+                # memory-write error must never fail or re-queue a build task, and
+                # the loop stays memory-agnostic (the recorder is injected).
+                if recorder is not None:
+                    with contextlib.suppress(Exception):
+                        recorder(task, outcome, verdict, merged)
+
             if not verdict.ok:
                 store.mark_failed(task.identifier, now=now_fn(),
                                   reason=verdict.reason, failure_class="grader")
+                record(merged=False)
                 return _TaskRun(charged=charged, failed=True, progressed=True)
             if integrator is None:
                 # Default: DB-only merge boundary (per-branch, no git advance).
                 store.mark_merged(task.identifier, now=now_fn())
+                record(merged=True)
                 return _TaskRun(charged=charged, merged=True, progressed=True)
             # Integration mode (serial only): actually merge the branch into main.
             merge = await integrator(task, outcome)
             if merge.ok:
                 store.mark_merged(task.identifier, now=now_fn())
+                record(merged=True)
                 return _TaskRun(charged=charged, merged=True, integrated=True, progressed=True)
             # Conflict/failure: main is NOT advanced. Burn a retry under a distinct
             # class so LP2 accounting stays honest.
             store.mark_failed(task.identifier, now=now_fn(),
                               reason=merge.reason, failure_class="integration")
+            record(merged=False)
             return _TaskRun(charged=charged, failed=True, progressed=True)
         except Exception as exc:  # noqa: BLE001 — dispatcher infra error is engine-side
             store.mark_adapter_failure(task.identifier, reason=f"dispatch error: {exc}")
@@ -319,5 +339,6 @@ __all__ = [
     "Integrator",
     "LoopOptions",
     "LoopSummary",
+    "Recorder",
     "run_build_loop",
 ]

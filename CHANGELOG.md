@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+- **Cross-run memory is now wired into the build loop (#37).** `oxison build`
+  captures grader-verified outcomes to `oxison-build/memory.db` and front-loads
+  relevant priors from past runs *in the same repo* into each worker's prompt.
+  Default-on; `--no-memory` disables it. Capture is gated by the grader (a
+  verified+merged task → a `procedural` recipe; a grader-rejected one → an
+  `episodic` anti-pattern; engine outages store nothing), and retrieval is
+  repo-scoped and **abstaining** — a weak match injects nothing rather than a
+  plausible-but-wrong prior. Injected memory is framed as advisory (the task's
+  own acceptance criteria win) and sanitized against the `<task_data>` fence so a
+  stored field can't break out of the worker's data block.
+
 ### Security
 - **`.gnupg` is now read-denied to the sandboxed build worker** (v0.5.0 CTO swarm).
   It was write-protected but readable, so a prompt-injected worker could read GPG

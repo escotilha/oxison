@@ -30,6 +30,24 @@ if TYPE_CHECKING:
     from ..engine.taskstore import Task
 
 
+def _safe(text: str) -> str:
+    """Neutralize the worker-prompt ``<task_data>`` fence delimiters and collapse
+    newlines in a memory field before it is formatted into the injected block.
+
+    A record's ``purpose``/``truth``/``anchors`` derive from prior (untrusted)
+    task text, so a stored ``</task_data>`` must not be able to close the worker's
+    data fence early, and a stored newline must not let an injected field
+    restructure the advisory block. Mirrors ``engine.dispatch._fence_safe`` but is
+    defined locally so ``memory/`` imports nothing from the asyncio-heavy engine.
+    """
+    return (
+        text.replace("</task_data>", "[/task_data]")
+        .replace("<task_data>", "[task_data]")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
 def memory_query_for_task(task: Task) -> str:
     """Build the retrieval query for a task: title + rationale + kind + criteria.
 
@@ -68,10 +86,10 @@ def build_memory_block(
     ]
     for i, hit in enumerate(hits, start=1):
         rec = hit.record
-        lines.append(f"{i}. [{rec.tier}] {rec.purpose}")
-        lines.append(f"   {rec.truth}")
+        lines.append(f"{i}. [{rec.tier}] {_safe(rec.purpose)}")
+        lines.append(f"   {_safe(rec.truth)}")
         if rec.anchors:
-            lines.append(f"   relevant areas: {', '.join(rec.anchors)}")
+            lines.append(f"   relevant areas: {', '.join(_safe(a) for a in rec.anchors)}")
         store.touch(hit.key, now)
     return "\n".join(lines)
 

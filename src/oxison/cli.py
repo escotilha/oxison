@@ -301,6 +301,12 @@ def build_parser() -> argparse.ArgumentParser:
              "defaults the model to the provider's, override with --model. "
              "Sandboxed build workers auto-allow the provider's API host.",
     )
+    build_p.add_argument(
+        "--no-memory", action="store_true",
+        help="disable cross-run memory (default: on — capture grader-verified "
+             "outcomes to oxison-build/memory.db and inject relevant priors into "
+             "workers; scoped to this repo)",
+    )
     build_p.set_defaults(func=cmd_build)
 
     auth_p = sub.add_parser(
@@ -711,7 +717,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     """Oxfaz: ingest a roadmap.json and run the autonomous build loop."""
     from .engine.dispatch import DispatchOutcome, launch_worker
     from .engine.engconfig import EngineConfig
-    from .engine.gates import grade_diff
+    from .engine.gates import GradeVerdict, grade_diff
     from .engine.loop import LoopOptions, run_build_loop
     from .engine.roadmap_ingest import (
         RoadmapIngestError,
@@ -720,6 +726,13 @@ def cmd_build(args: argparse.Namespace) -> int:
     )
     from .engine.sandbox import resolve_srt_binary
     from .engine.taskstore import Task, TaskStore
+    from .memory import (
+        MemoryConfig,
+        MemoryStore,
+        build_memory_block,
+        capture_from_outcome,
+        memory_query_for_task,
+    )
 
     repo = Path(args.repo).expanduser().resolve()
     if not (repo / ".git").exists():
@@ -850,17 +863,41 @@ def cmd_build(args: argparse.Namespace) -> int:
     wt_root = repo / "oxison-build" / "worktrees"
     log_root = repo / "oxison-build" / "logs"
 
+    # Cross-run memory (default on; --no-memory disables). Scope = repo name so
+    # priors never cross between projects. Keyword-only (no embedder dependency);
+    # abstains below MemoryConfig.abstain_min_score so a weak match injects nothing.
+    mem_store = None if args.no_memory else MemoryStore.open(repo)
+    mem_config = MemoryConfig()
+
     async def dispatcher(task: Task, branch: str) -> DispatchOutcome:
+        memory_block = ""
+        if mem_store is not None:
+            memory_block = build_memory_block(
+                mem_store, query=memory_query_for_task(task), scope=repo.name,
+                now=_now_iso(), config=mem_config, task_kind=task.kind,
+            )
         return await launch_worker(
             repo, task_identifier=task.identifier, task_title=task.title,
             rationale=task.rationale, acceptance=task.acceptance,
             files_hint=task.files_touched, engine_config=engine_config,
             auth_mode=cfg.auth_mode, api_key=cfg.api_key, model=cfg.model,
             worktree_root=wt_root, log_path=log_root / f"{task.identifier}.log",
+            memory_block=memory_block,
         )
 
     def grader(outcome: DispatchOutcome) -> Any:
         return grade_diff(outcome.changed_files, protected_paths=engine_config.protected_paths)
+
+    def recorder(
+        task: Task, outcome: DispatchOutcome, verdict: GradeVerdict, merged: bool
+    ) -> None:
+        # Grader-gated capture (capture_from_outcome decides storable-or-not).
+        if mem_store is None:
+            return
+        capture_from_outcome(
+            mem_store, task=task, outcome=outcome, verdict=verdict,
+            scope=repo.name, now=_now_iso(), merged=merged, config=mem_config,
+        )
 
     options = LoopOptions(
         branch_prefix=engine_config.branch_prefix, max_workers=args.max_workers,
@@ -880,17 +917,26 @@ def cmd_build(args: argparse.Namespace) -> int:
     else:
         sandbox_status = "srt (Layer 1, filesystem + egress confined)"
     print(f"  sandbox       : {sandbox_status}")
+    if mem_store is not None:
+        print(f"  memory        : on ({len(mem_store.live_in_scope(repo.name))} in scope)")
+    else:
+        print("  memory        : off (--no-memory)")
     if integrator is not None:
         print("  integrate     : ON — each graded branch is merged into "
               f"{repo.name}'s current branch (main accumulates)")
     print("\n→ BUILD MODE — workers WRITE code in isolated worktrees under "
           "oxison-build/worktrees/\n")
 
-    summary = asyncio.run(
-        run_build_loop(store, options=options, dispatcher=dispatcher,
-                       grader=grader, now_fn=_now_iso, now_epoch_fn=time.time,
-                       integrator=integrator)
-    )
+    try:
+        summary = asyncio.run(
+            run_build_loop(store, options=options, dispatcher=dispatcher,
+                           grader=grader, now_fn=_now_iso, now_epoch_fn=time.time,
+                           integrator=integrator,
+                           recorder=recorder if mem_store is not None else None)
+        )
+    finally:
+        if mem_store is not None:
+            mem_store.close()
 
     print(f"\n✓ build loop halted: {summary.halt_reason}")
     print(f"  ticks={summary.ticks} dispatched={summary.dispatched} "
