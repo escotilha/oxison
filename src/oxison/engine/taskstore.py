@@ -283,6 +283,22 @@ class TaskStore:
         )
         self._conn.commit()
 
+    def reset_planning(self) -> int:
+        """Return every ``planning`` task to ``planned`` — startup reconciliation.
+
+        A task left in ``planning`` is the residue of a crash mid-transition; it
+        is not ``dispatched`` (so ``inflight_tasks`` won't catch it) yet counts as
+        not-complete, so without this it would wedge the loop forever. Resetting
+        to ``planned`` (not ``failed``) burns no retry — no dispatch happened.
+        Returns the number of tasks reset.
+        """
+        cur = self._conn.execute(
+            "UPDATE task SET status = ? WHERE status = ?",
+            (STATUS_PLANNED, STATUS_PLANNING),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
     def record_plan_verdict(
         self, identifier: str, *, plan_status: str, plan_json: str = "",
         files_touched: list[str] | None = None,
