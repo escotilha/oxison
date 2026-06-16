@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from oxison.engine.dispatch import DispatchOutcome
@@ -399,3 +401,58 @@ async def test_no_progress_tick_reuses_cached_queries(tmp_path):
     # each stable query runs exactly once despite multiple no-progress ticks.
     assert calls["status_counts"] == 1
     assert calls["merged_identifiers"] == 1
+
+
+def _peak_tracking_dispatcher():
+    """A dispatcher that records the peak concurrent in-flight count."""
+    state = {"active": 0, "peak": 0}
+
+    async def disp(task, branch):
+        state["active"] += 1
+        state["peak"] = max(state["peak"], state["active"])
+        await asyncio.sleep(0.02)  # hold the slot open so overlap is observable
+        state["active"] -= 1
+        return _ok_outcome(branch)
+
+    return disp, state
+
+
+@pytest.mark.asyncio
+async def test_max_workers_dispatches_batch_concurrently(tmp_path):
+    # #16 (M3): independent eligible tasks run concurrently at max_workers>1.
+    s = _store_with(tmp_path, 3)  # 3 tasks, no deps, no file overlap
+    disp, state = _peak_tracking_dispatcher()
+    summary = await _run(s, options=LoopOptions(max_workers=3), dispatcher=disp)
+    assert summary.merged == 3
+    assert state["peak"] >= 2  # genuinely concurrent (serial peak would be 1)
+
+
+@pytest.mark.asyncio
+async def test_integration_mode_stays_serial(tmp_path):
+    # #16: with an integrator the ff-only invariant requires serial dispatch even
+    # if max_workers>1.
+    s = _store_with(tmp_path, 3)
+    disp, state = _peak_tracking_dispatcher()
+
+    async def integ(task, outcome):
+        return MergeOutcome(ok=True, reason="ff", merged_sha="abc")
+
+    summary = await run_build_loop(
+        s, options=LoopOptions(max_workers=3), dispatcher=disp, grader=_grader_ok,
+        now_fn=_now, now_epoch_fn=lambda: 0.0, integrator=integ,
+    )
+    assert summary.integrated == 3
+    assert state["peak"] == 1  # serial despite max_workers=3
+
+
+@pytest.mark.asyncio
+async def test_parallel_overlapping_files_serialize_via_locks(tmp_path):
+    # #16: even in the parallel path, two tasks declaring the same file never run
+    # concurrently — the file lock skips the second until the first releases.
+    s = TaskStore.open(tmp_path)
+    s.add_task("a", "A", priority=1, acceptance=["x"], files_touched=["src/shared.py"])
+    s.add_task("b", "B", priority=2, acceptance=["x"], files_touched=["src/shared.py"])
+    disp, state = _peak_tracking_dispatcher()
+    summary = await _run(s, options=LoopOptions(max_workers=2), dispatcher=disp)
+    assert summary.merged == 2  # both eventually merge (across ticks)
+    assert state["peak"] == 1  # the shared-file lock prevented concurrent dispatch
