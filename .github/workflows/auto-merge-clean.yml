@@ -1,0 +1,114 @@
+name: Auto-Merge Clean
+
+# Squash-merges any open PR that is:
+#   - state = OPEN
+#   - mergeStateStatus = CLEAN (no conflicts, behind nothing, every check green)
+#   - not draft
+#   - labeled "auto-merge" (opt-in safety: nothing merges unless explicitly tagged)
+#
+# oxison has no required-status-check branch protection, so mergeStateStatus only
+# reaches CLEAN once ALL checks (ci, claude-review, CodeQL, etc.) have passed —
+# pending/failing checks leave it UNSTABLE. Keying on CLEAN therefore waits for a
+# fully-green PR even without configured required checks.
+#
+# Triggers:
+#   - workflow_run on the gating CI workflows' completion (primary, reliable
+#     signal — fires a sweep the moment CI finishes, including PRs labeled while
+#     CI was still running, whose `labeled` event no-ops mid-run).
+#   - check_suite.completed (secondary; GitHub frequently suppresses this on
+#     re-runs, so it is a backup to workflow_run, not the primary path).
+#   - pull_request_target.labeled (label an already-green PR → merge now).
+#   - schedule (cron backstop for anything the events miss).
+#   - workflow_dispatch (manual nudge from the Actions tab).
+#
+# Security note (pull_request_target): this trigger runs in the BASE-repo context
+# with secrets. This workflow deliberately checks out NO ref at all — it only
+# calls `gh pr merge` via GITHUB_TOKEN — so the pull_request_target pwn-request
+# attack surface does not apply. If you ever add actions/checkout here, you MUST
+# pin to the base sha and treat all PR content as untrusted.
+
+on:
+  workflow_run:
+    # Must match each workflow's top-level `name:` exactly.
+    workflows: ["ci", "claude-review"]
+    types: [completed]
+  check_suite:
+    types: [completed]
+  pull_request_target:
+    types: [labeled]
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-merge-clean
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: Squash-merge CLEAN PRs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Skip noise: only sweep after a SUCCESSFUL ci/check run, or when the applied
+    # label is "auto-merge"; schedule and manual dispatch always run.
+    if: >-
+      (github.event_name == 'check_suite' && github.event.check_suite.conclusion == 'success') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'pull_request_target' && github.event.label.name == 'auto-merge') ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Find and squash-merge CLEAN PRs labeled auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Fast exit if nothing is labeled — most ci/check fires are for PRs with
+          # no auto-merge label, and we don't want to poll (below) for them.
+          LABELED=$(gh pr list --repo "$REPO" --state open --label auto-merge \
+            --json number --jq 'length')
+          if [ "$LABELED" -eq 0 ]; then
+            echo "No auto-merge-labeled PRs open."
+            exit 0
+          fi
+
+          # Poll for CLEAN, tolerating GitHub's post-event mergeStateStatus
+          # recompute race: right after a check completes or a label is applied,
+          # GitHub briefly reports UNKNOWN/UNSTABLE while it recomputes
+          # mergeability, so a single immediate check would no-op. Wait up to ~90s.
+          PRS='[]'
+          for attempt in 1 2 3 4 5 6; do
+            PRS=$(gh pr list \
+              --repo "$REPO" \
+              --state open \
+              --label auto-merge \
+              --json number,mergeStateStatus,isDraft \
+              --jq '[.[] | select(.mergeStateStatus=="CLEAN" and .isDraft==false) | .number]')
+            COUNT=$(echo "$PRS" | jq 'length')
+            [ "$COUNT" -gt 0 ] && break
+            echo "attempt $attempt/6: no CLEAN PRs yet (mergeStateStatus settling) — wait 15s"
+            sleep 15
+          done
+
+          COUNT=$(echo "$PRS" | jq 'length')
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No CLEAN auto-merge PRs to process after polling."
+            exit 0
+          fi
+
+          echo "$COUNT PR(s) to merge: $(echo "$PRS" | jq -c .)"
+          echo "$PRS" | jq -r '.[]' | while read -r N; do
+            echo ""
+            echo "=== Merging PR #$N ==="
+            if gh pr merge "$N" --repo "$REPO" --squash --delete-branch; then
+              echo "✓ #$N merged"
+            else
+              echo "✗ #$N merge failed — leaving for next run"
+            fi
+            sleep 5  # small delay to avoid rate-limit between merges
+          done
