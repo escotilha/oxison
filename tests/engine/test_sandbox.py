@@ -66,6 +66,14 @@ def test_denyread_covers_oxisons_own_keys(tmp_path):
     assert "/home/u/.config/oxison" in s["filesystem"]["denyRead"]
 
 
+def test_denyread_covers_gnupg(tmp_path):
+    # v0.5.0 audit: .gnupg is write-protected but was readable — GPG private keys
+    # must be denied READ too (same as .ssh).
+    assert ".gnupg" in DEFAULT_CRED_DENY
+    s, _, _ = _settings(tmp_path)
+    assert "/home/u/.gnupg" in s["filesystem"]["denyRead"]
+
+
 def test_settings_has_all_four_required_keys(tmp_path):
     # srt 1.0 rejects a config missing any of these (falls back to deny-all).
     s, _, _ = _settings(tmp_path)

@@ -52,6 +52,7 @@ DEFAULT_SANDBOX_DOMAINS: tuple[str, ...] = (
 #: srt already blocks well-known secrets).
 DEFAULT_CRED_DENY: tuple[str, ...] = (
     ".ssh",
+    ".gnupg",  # GPG private keys — write-protected via protected-paths, also deny READ
     ".aws",
     ".config/gcloud",
     ".config/gh",

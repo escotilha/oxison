@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- **`.gnupg` is now read-denied to the sandboxed build worker** (v0.5.0 CTO swarm).
+  It was write-protected but readable, so a prompt-injected worker could read GPG
+  private keys; now in `DEFAULT_CRED_DENY` alongside `.ssh`.
+
+### Internal
+- Added isolation tests for `extract_cost_from_log` (the C3 budget-floor path) —
+  result-event, no-result, missing-file, and truncated-trailing-line cases.
+
 ## [0.5.0] — 2026-06-16
 
 ### Security
