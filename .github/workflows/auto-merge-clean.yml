@@ -2,22 +2,30 @@ name: Auto-Merge Clean
 
 # Squash-merges any open PR that is:
 #   - state = OPEN
-#   - mergeStateStatus = CLEAN (no conflicts, behind nothing, every check green)
 #   - not draft
 #   - labeled "auto-merge" (opt-in safety: nothing merges unless explicitly tagged)
+#   - mergeable == MERGEABLE (no conflicts)
+#   - every status check EXCEPT this workflow's own ("Squash-merge CLEAN PRs")
+#     has concluded SUCCESS / NEUTRAL / SKIPPED, and at least one such check exists
 #
-# oxison has no required-status-check branch protection, so mergeStateStatus only
-# reaches CLEAN once ALL checks (ci, claude-review, CodeQL, etc.) have passed —
-# pending/failing checks leave it UNSTABLE. Keying on CLEAN therefore waits for a
-# fully-green PR even without configured required checks.
+# Why the per-check gate instead of mergeStateStatus == CLEAN:
+# oxison has no required-status-check protection, so when the `auto-merge` label is
+# applied the resulting pull_request_target run attaches its OWN pending check
+# ("Squash-merge CLEAN PRs") to the PR — which flips mergeStateStatus to UNSTABLE
+# while this very job polls. A CLEAN-only gate therefore can never see itself green
+# and self-defeats, leaving the merge to the cron backstop (the observed delay on
+# PR #40). Evaluating the check rollup while EXCLUDING this workflow's own check
+# sidesteps that race: a PR whose only non-green check is us is treated as ready.
+# Requiring >=1 non-self check avoids merging in the brief window before CI registers.
 #
 # Triggers:
-#   - workflow_run on the gating CI workflows' completion (primary, reliable
-#     signal — fires a sweep the moment CI finishes, including PRs labeled while
-#     CI was still running, whose `labeled` event no-ops mid-run).
-#   - check_suite.completed (secondary; GitHub frequently suppresses this on
-#     re-runs, so it is a backup to workflow_run, not the primary path).
-#   - pull_request_target.labeled (label an already-green PR → merge now).
+#   - workflow_run on the gating CI workflows' completion (reliable signal; these
+#     runs do NOT attach a check to the PR, so they never self-block).
+#   - check_suite.completed (catches suites — e.g. CodeQL — not named in
+#     workflow_run; GitHub suppresses it on re-runs, so it is a backup not the only
+#     path).
+#   - pull_request_target.labeled (label an already-green PR -> merge now; the
+#     per-check gate above is what lets this path work despite its own pending check).
 #   - schedule (cron backstop for anything the events miss).
 #   - workflow_dispatch (manual nudge from the Actions tab).
 #
@@ -62,7 +70,7 @@ jobs:
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch'
     steps:
-      - name: Find and squash-merge CLEAN PRs labeled auto-merge
+      - name: Find and squash-merge ready PRs labeled auto-merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -77,27 +85,38 @@ jobs:
             exit 0
           fi
 
-          # Poll for CLEAN, tolerating GitHub's post-event mergeStateStatus
-          # recompute race: right after a check completes or a label is applied,
-          # GitHub briefly reports UNKNOWN/UNSTABLE while it recomputes
-          # mergeability, so a single immediate check would no-op. Wait up to ~90s.
+          # "Ready" = not draft, no conflicts, and every check OTHER THAN this
+          # workflow's own has concluded green (with >=1 such check present). See
+          # the header for why we exclude our own check instead of using
+          # mergeStateStatus == CLEAN. Poll up to ~90s for checks / mergeability to
+          # settle after the triggering event (GitHub recomputes asynchronously).
+          READY_JQ='[ .[]
+            | select(.isDraft == false and .mergeable == "MERGEABLE")
+            | . as $pr
+            | ([ $pr.statusCheckRollup[]?
+                 | select((.name // .context) != "Squash-merge CLEAN PRs") ]) as $checks
+            | select(($checks | length) > 0)
+            | select($checks | all((.conclusion // .state) as $c
+                | ($c == "SUCCESS" or $c == "NEUTRAL" or $c == "SKIPPED")))
+            | .number ]'
+
           PRS='[]'
           for attempt in 1 2 3 4 5 6; do
             PRS=$(gh pr list \
               --repo "$REPO" \
               --state open \
               --label auto-merge \
-              --json number,mergeStateStatus,isDraft \
-              --jq '[.[] | select(.mergeStateStatus=="CLEAN" and .isDraft==false) | .number]')
+              --json number,mergeable,isDraft,statusCheckRollup \
+              --jq "$READY_JQ")
             COUNT=$(echo "$PRS" | jq 'length')
             [ "$COUNT" -gt 0 ] && break
-            echo "attempt $attempt/6: no CLEAN PRs yet (mergeStateStatus settling) — wait 15s"
+            echo "attempt $attempt/6: no ready PRs yet (checks/mergeability settling) — wait 15s"
             sleep 15
           done
 
           COUNT=$(echo "$PRS" | jq 'length')
           if [ "$COUNT" -eq 0 ]; then
-            echo "No CLEAN auto-merge PRs to process after polling."
+            echo "No ready auto-merge PRs to process after polling."
             exit 0
           fi
 
