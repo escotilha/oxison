@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS lock (
     acquired_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_status ON task(status);
+-- Serves find_next_planned's `WHERE status=? AND dispatch_count<? ORDER BY
+-- priority, id` — the status prefix filters, the priority/id suffix orders.
+CREATE INDEX IF NOT EXISTS idx_task_status_priority_id ON task(status, priority, id);
 """
 
 
@@ -263,8 +266,10 @@ class TaskStore:
         return [_row_to_task(r) for r in rows]
 
     def inflight_tasks(self) -> list[Task]:
+        # status='dispatched' already implies merged_at IS NULL (a merge moves the
+        # row to 'merged'), so the extra predicate was dead — dropped.
         rows = self._conn.execute(
-            "SELECT * FROM task WHERE status = ? AND merged_at IS NULL",
+            "SELECT * FROM task WHERE status = ?",
             (STATUS_DISPATCHED,),
         ).fetchall()
         return [_row_to_task(r) for r in rows]

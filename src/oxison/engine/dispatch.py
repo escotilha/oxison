@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import os
 import signal
 from dataclasses import dataclass, field
@@ -30,6 +29,12 @@ from pathlib import Path
 from oxison.dispatch import generate_session_id
 
 from .engconfig import EngineConfig
+from .gitutil import (
+    changed_files,
+    extract_cost_from_log,
+    git_cmd,
+    parse_changed_files,  # re-exported for back-compat (tests import it from here)
+)
 from .invoke import ToolSet, build_argv, build_env, kill_process_group
 from .sandbox import (
     DEFAULT_SANDBOX_DOMAINS,
@@ -104,66 +109,6 @@ def build_worker_prompt(task_title: str, *, rationale: str, acceptance: list[str
         "- Keep the change focused on this task; do not refactor unrelated code.\n"
         "- Commit your work with a clear message when the acceptance criteria pass."
     )
-
-
-def parse_changed_files(porcelain: str) -> list[str]:
-    """Parse ``git status --porcelain`` output into a list of changed paths.
-
-    Handles renames (``R  old -> new`` → the new path) and quoted paths.
-    """
-    files: list[str] = []
-    for line in porcelain.splitlines():
-        if len(line) < 4:
-            continue
-        rest = line[3:]
-        if " -> " in rest:  # rename/copy
-            rest = rest.split(" -> ", 1)[1]
-        files.append(rest.strip().strip('"'))
-    return files
-
-
-async def _git(args: list[str], *, cwd: Path) -> tuple[int, str]:
-    proc = await asyncio.create_subprocess_exec(
-        "git", *args, cwd=os.fspath(cwd),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
-    out, err = await proc.communicate()
-    return proc.returncode or 0, (out or err).decode("utf-8", errors="replace")
-
-
-async def _changed_files(worktree: Path, base_sha: str) -> list[str]:
-    """All files the worker changed vs. the worktree's base commit.
-
-    Unions uncommitted changes (``status --porcelain``) with committed ones
-    (``diff base..HEAD``). Diffing against the captured *base* SHA — not
-    ``HEAD`` — is what lets a worker that **commits** its work still have its
-    changes detected (after a commit, ``diff HEAD`` is empty).
-    """
-    rc1, porcelain = await _git(["status", "--porcelain"], cwd=worktree)
-    files = set(parse_changed_files(porcelain))
-    rc2, committed = await _git(["diff", "--name-only", base_sha, "HEAD"], cwd=worktree)
-    if rc2 == 0:
-        files.update(f for f in committed.splitlines() if f.strip())
-    return sorted(files)
-
-
-def _extract_cost_from_log(log_path: Path) -> float:
-    """Pull ``total_cost_usd`` from the worker's stream-json ``result`` event."""
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return 0.0
-    for line in reversed(text.splitlines()):
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            evt = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(evt, dict) and evt.get("type") == "result":
-            return float(evt.get("total_cost_usd", 0.0))
-    return 0.0
 
 
 def worker_log_secrets(api_key: str | None, engine_config: EngineConfig) -> list[str]:
@@ -253,15 +198,15 @@ async def launch_worker(
     # deterministic per task id, so without this a re-dispatch would fail on
     # "branch already exists" — which looks like an engine outage and would
     # re-queue the task forever. Errors are ignored (nothing to clean is fine).
-    await _git(["worktree", "remove", "--force", os.fspath(worktree)], cwd=repo)
-    await _git(["worktree", "prune"], cwd=repo)
-    await _git(["branch", "-D", branch], cwd=repo)
+    await git_cmd(["worktree", "remove", "--force", os.fspath(worktree)], cwd=repo)
+    await git_cmd(["worktree", "prune"], cwd=repo)
+    await git_cmd(["branch", "-D", branch], cwd=repo)
 
     # Capture the base commit so a worker that COMMITS still has its diff seen.
     # A failure here is a git/engine problem (not the task's fault): routing it
     # through adapter_failure gives a free retry + a clear error, instead of
     # silently using "HEAD" and surfacing the opaque "worker produced no changes".
-    rc_base, base_out = await _git(["rev-parse", "HEAD"], cwd=repo)
+    rc_base, base_out = await git_cmd(["rev-parse", "HEAD"], cwd=repo)
     if rc_base != 0 or not base_out.strip():
         return DispatchOutcome(
             ok=False, branch=branch, worktree_path=str(worktree),
@@ -270,7 +215,9 @@ async def launch_worker(
         )
     base_sha = base_out.strip()
 
-    rc, msg = await _git(["worktree", "add", "-b", branch, os.fspath(worktree), "HEAD"], cwd=repo)
+    rc, msg = await git_cmd(
+        ["worktree", "add", "-b", branch, os.fspath(worktree), "HEAD"], cwd=repo
+    )
     if rc != 0:
         # Couldn't even create the worktree — an engine/infra problem, not the
         # task's fault, so don't burn a retry.
@@ -361,8 +308,8 @@ async def launch_worker(
     # before we read it for cost or persist it.
     redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
     exit_code = proc.returncode
-    changed = await _changed_files(worktree, base_sha)
-    cost = engine_config.worker_max_budget_usd if timed_out else _extract_cost_from_log(log_path)
+    changed = await changed_files(worktree, base_sha)
+    cost = engine_config.worker_max_budget_usd if timed_out else extract_cost_from_log(log_path)
     ok = (not timed_out) and exit_code == 0 and bool(changed)
     error = None
     if timed_out:

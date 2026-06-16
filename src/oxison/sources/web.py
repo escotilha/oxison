@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-import urllib.error
 import urllib.request
 from html.parser import HTMLParser
 from urllib.parse import urlparse

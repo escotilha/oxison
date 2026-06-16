@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Internal
+- **Code-health pass (#18, partial).** Lifted the shared git/log helpers
+  (`git_cmd`/`changed_files`/`extract_cost_from_log`/`parse_changed_files`) out of
+  `engine/dispatch.py` into a public `engine/gitutil.py` (no more cross-module
+  private imports from `integrate.py`/`container.py`); added a compound
+  `(status, priority, id)` index serving `find_next_planned`; dropped a dead
+  `AND merged_at IS NULL` predicate in `inflight_tasks`; removed an unused
+  `urllib.error` import. (Remaining #18 items — memory `put()` single-transaction,
+  container clone cleanup, `cli.py` split + tests, memory full-table-scan — stay
+  tracked in the issue.)
+
 ### Fixed
 - **Loop reconciles a stranded `planning` task on startup (#15).** A task left in
   `planning` after a crash was caught by neither the inflight sweep nor the

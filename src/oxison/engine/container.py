@@ -38,13 +38,12 @@ from oxison.dispatch import generate_session_id
 from .dispatch import (
     DEFAULT_WORKER_TIMEOUT_S,
     DispatchOutcome,
-    _changed_files,
-    _extract_cost_from_log,
     build_worker_prompt,
     redact_secrets,
     worker_log_secrets,
 )
 from .engconfig import EngineConfig
+from .gitutil import changed_files, extract_cost_from_log
 from .invoke import ToolSet, build_argv, build_env, kill_process_group
 from .sandbox import (
     DEFAULT_SANDBOX_DOMAINS,
@@ -337,8 +336,8 @@ async def launch_worker_container(
     # Redact any credential the worker may have surfaced into its log (M6/CWE-532).
     redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
     exit_code = proc.returncode
-    changed = await _changed_files(clone_dir, base_sha)
-    cost = engine_config.worker_max_budget_usd if timed_out else _extract_cost_from_log(log_path)
+    changed = await changed_files(clone_dir, base_sha)
+    cost = engine_config.worker_max_budget_usd if timed_out else extract_cost_from_log(log_path)
     ok_run = (not timed_out) and exit_code == 0 and bool(changed)
     error = None
     if timed_out:

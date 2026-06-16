@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from oxison.engine.dispatch import _changed_files
+from oxison.engine.gitutil import changed_files
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
 
@@ -39,7 +39,7 @@ async def test_changed_files_detects_committed_change(tmp_path):
     _git(["add", "-A"], wt)
     _git(["commit", "-qm", "work"], wt)
     # Diffing against the captured base SHA (not HEAD) detects the committed change.
-    changed = await _changed_files(wt, base)
+    changed = await changed_files(wt, base)
     assert "new.py" in changed
 
 
@@ -50,7 +50,7 @@ async def test_changed_files_detects_uncommitted_change(tmp_path):
     wt = tmp_path / "wt"
     _git(["worktree", "add", "-b", "feat/y", str(wt), "HEAD"], repo)
     (wt / "uncommitted.py").write_text("y = 2\n")  # not committed
-    changed = await _changed_files(wt, base)
+    changed = await changed_files(wt, base)
     assert "uncommitted.py" in changed
 
 
