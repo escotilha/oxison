@@ -11,8 +11,8 @@ merge commit, no 3-way, no conflict. ``--ff-only`` enforces that invariant and, 
 a fast-forward is ever impossible, refuses **without touching the working tree** —
 the loop then fails the task and main is left exactly where it was.
 
-Real-git only (faked in the loop tests). Reuses the async ``_git`` helper from
-``dispatch`` rather than re-implementing the subprocess plumbing.
+Real-git only (faked in the loop tests). Reuses the async ``git_cmd`` helper from
+``gitutil`` rather than re-implementing the subprocess plumbing.
 """
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .dispatch import DispatchOutcome, _git
+from .dispatch import DispatchOutcome
+from .gitutil import git_cmd
 from .taskstore import Task
 
 Integrator = Callable[[Task, DispatchOutcome], Awaitable["MergeOutcome"]]
@@ -51,33 +52,33 @@ async def integrate_branch(
     current branch onto it. See the module docstring for the safety invariant."""
     # (a) The worker may leave changes uncommitted; an uncommitted change in a
     # linked worktree is invisible to a merge from the repo root. Commit it first.
-    rc, out = await _git(["status", "--porcelain"], cwd=worktree)
+    rc, out = await git_cmd(["status", "--porcelain"], cwd=worktree)
     if rc != 0:
         return MergeOutcome(ok=False, reason=f"git status failed in worktree: {out.strip()[:200]}")
     if out.strip():
-        rc, out = await _git(["add", "-A"], cwd=worktree)
+        rc, out = await git_cmd(["add", "-A"], cwd=worktree)
         if rc != 0:
             return MergeOutcome(ok=False, reason=f"git add failed: {out.strip()[:200]}")
-        rc, out = await _git(["commit", "-m", f"oxfaz: {title} ({identifier})"], cwd=worktree)
+        rc, out = await git_cmd(["commit", "-m", f"oxfaz: {title} ({identifier})"], cwd=worktree)
         if rc != 0:
             return MergeOutcome(ok=False, reason=f"git commit failed: {out.strip()[:200]}")
 
     # (b) Resolve the live branch from HEAD — never hardcode main/master.
-    rc, cur = await _git(["symbolic-ref", "--short", "HEAD"], cwd=repo)
+    rc, cur = await git_cmd(["symbolic-ref", "--short", "HEAD"], cwd=repo)
     target = cur.strip()
     if rc != 0 or not target:
         return MergeOutcome(ok=False, reason="repo is in detached HEAD; cannot integrate")
 
     # (c) Fast-forward only. Always a ff at max_workers=1; refuses cleanly otherwise.
-    rc, msg = await _git(["merge", "--ff-only", branch], cwd=repo)
+    rc, msg = await git_cmd(["merge", "--ff-only", branch], cwd=repo)
     if rc == 0:
-        rc2, sha = await _git(["rev-parse", "HEAD"], cwd=repo)
+        rc2, sha = await git_cmd(["rev-parse", "HEAD"], cwd=repo)
         return MergeOutcome(
             ok=True, reason="fast-forward", merged_sha=sha.strip() if rc2 == 0 else None
         )
     # Non-ff: a ff-only refusal changes nothing, but abort defensively so the repo
     # is guaranteed clean for the next task, then report the conflict.
-    await _git(["merge", "--abort"], cwd=repo)
+    await git_cmd(["merge", "--abort"], cwd=repo)
     return MergeOutcome(
         ok=False,
         reason=f"non-fast-forward merge of {branch} into {target} refused: {msg.strip()[:200]}",

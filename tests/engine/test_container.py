@@ -198,8 +198,8 @@ def _mock_container_io(monkeypatch, captured):
     monkeypatch.setattr(c, "_run_capture", fake_capture)
     monkeypatch.setattr(c, "prepare_clone", fake_prepare)
     monkeypatch.setattr(c, "remove_container", fake_remove)
-    monkeypatch.setattr(c, "_changed_files", fake_changed)
-    monkeypatch.setattr(c, "_extract_cost_from_log", lambda p: 0.0)
+    monkeypatch.setattr(c, "changed_files", fake_changed)
+    monkeypatch.setattr(c, "extract_cost_from_log", lambda p: 0.0)
     monkeypatch.setattr(c.asyncio, "create_subprocess_exec", fake_exec)
 
 
