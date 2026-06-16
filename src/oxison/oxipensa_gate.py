@@ -20,16 +20,25 @@ into the contract itself.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 
 from .engine.engconfig import EngineConfig
 from .engine.protected import is_protected_path
-from .roadmap_doc import ALLOWED_KINDS, RoadmapDoc
+from .roadmap_doc import ALLOWED_KINDS, RoadmapDoc, RoadmapTask
 
 #: Default scope fence on a single roadmap. A plan with more tasks than this is
 #: almost certainly under-decomposed reasoning, not a real backlog — reject and
 #: ask the planner to consolidate.
 DEFAULT_MAX_TASKS = 40
+
+#: Default relevance floor for the plan-boundary filter. Mirrors the memory
+#: subsystem's ``abstain_min_score`` (0.25): prune only *clearly* off-target
+#: tasks (relevance < 0.25), so the filter removes speculative gold-plating
+#: without second-guessing the planner on genuinely-marginal calls. This is the
+#: numeric enforcement of "build today's product simply, not tomorrow's
+#: prematurely."
+DEFAULT_RELEVANCE_MIN_SCORE = 0.25
 
 
 @dataclass
@@ -151,4 +160,59 @@ def gate_roadmap(
     return GateResult(ok=not violations, violations=violations)
 
 
-__all__ = ["DEFAULT_MAX_TASKS", "GateResult", "gate_roadmap"]
+def filter_by_relevance(
+    doc: RoadmapDoc,
+    *,
+    min_score: float = DEFAULT_RELEVANCE_MIN_SCORE,
+) -> tuple[RoadmapDoc, list[RoadmapTask]]:
+    """Prune tasks whose ``relevance`` is below ``min_score``.
+
+    Pure, like :func:`gate_roadmap` — no I/O, no AI. The planner emits a
+    ``relevance`` self-assessment per task; this is the deterministic
+    *enforcement* of that judgment (the same emit-then-enforce split oxison uses
+    for priority and acceptance). It is the numeric form of Karpathy
+    Simplicity-First: drop speculative gold-plating *before* it becomes a build
+    contract.
+
+    **Transitive-keep.** A low-relevance task that a *kept* task depends on is
+    retained — otherwise pruning would leave a dangling dependency the plan-gate
+    would (rightly) reject. So the relevance filter never produces a roadmap the
+    gate can't accept; it only removes leaves that nothing relevant needs.
+
+    Returns ``(filtered_doc, pruned_tasks)``. ``pruned_tasks`` is empty when
+    nothing was dropped (including the ``min_score <= 0`` opt-out and the
+    all-default-``1.0`` case), so callers can cheaply detect a no-op.
+    """
+    if min_score <= 0.0:
+        return doc, []
+
+    by_id = {t.identifier: t for t in doc.tasks}
+    keep_ids = {t.identifier for t in doc.tasks if t.relevance >= min_score}
+
+    # Transitively pull in any below-floor task that a kept task depends on, so
+    # the survivor set is dependency-closed and the gate never sees a dangling
+    # dep we introduced.
+    frontier = list(keep_ids)
+    while frontier:
+        current = frontier.pop()
+        for dep in by_id[current].depends_on:
+            if dep in by_id and dep not in keep_ids:
+                keep_ids.add(dep)
+                frontier.append(dep)
+
+    if len(keep_ids) == len(doc.tasks):
+        return doc, []
+
+    # Preserve original task order in both outputs.
+    kept = [t for t in doc.tasks if t.identifier in keep_ids]
+    pruned = [t for t in doc.tasks if t.identifier not in keep_ids]
+    return dataclasses.replace(doc, tasks=kept), pruned
+
+
+__all__ = [
+    "DEFAULT_MAX_TASKS",
+    "DEFAULT_RELEVANCE_MIN_SCORE",
+    "GateResult",
+    "filter_by_relevance",
+    "gate_roadmap",
+]

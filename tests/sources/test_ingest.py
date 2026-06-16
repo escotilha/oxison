@@ -1,7 +1,14 @@
 from pathlib import Path
 
 from oxison.sources.base import SourceUnit
-from oxison.sources.ingest import IngestOutput, ingest_paths, render_extra_context
+from oxison.sources.ingest import (
+    LOW_RELEVANCE_ANNOTATE,
+    IngestOutput,
+    domain_terms_from_repomap,
+    ingest_paths,
+    render_extra_context,
+    source_relevance,
+)
 
 
 def test_ingest_dispatches_by_type_and_collects_ledger(tmp_path: Path):
@@ -96,3 +103,80 @@ def test_ingest_recording_stub_is_skipped_not_crash(tmp_path):
     out = ingest_paths([f], ocr_enabled=False, stt_key="sk-test")
     assert out.results[0].status == "skipped"
     assert "extraction failed" in (out.results[0].reason or "")
+
+
+# ---------------------------------------------------------------------------
+# Source domain-relevance gate (abstain-safe, repo mode only).
+# ---------------------------------------------------------------------------
+
+
+def _unit(text: str, locator: str = "src:x") -> SourceUnit:
+    return SourceUnit(text, "brief", "(x)", locator, {})
+
+
+def _build_repo_map_for(tmp_path: Path):
+    """A tiny on-disk repo whose top-level vocabulary is 'widget' / 'sprocket'.
+
+    Both terms are top-level entries so they land in the repo map's ``tree``
+    (the domain-term source); a deeply-nested file would not be captured.
+    """
+    from oxison.repomap import build_repo_map
+
+    (tmp_path / "widget").mkdir()
+    (tmp_path / "widget" / "core.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "sprocket").mkdir()
+    (tmp_path / "sprocket" / "core.py").write_text("y = 1\n", encoding="utf-8")
+    return build_repo_map(tmp_path)
+
+
+def test_render_without_domain_terms_is_unchanged():
+    # Backward compat: the default (domain_terms=None) reproduces the original
+    # rendering byte-for-byte — greenfield and old callers are unaffected.
+    units = [_unit("hello world", "a:1"), _unit("foo bar", "b:2")]
+    expected = "\n".join([
+        "=== ADDITIONAL SOURCES ===",
+        "(extracted by oxison from non-repo inputs; cite by locator)",
+        "\n--- [a:1] ---\nhello world",
+        "\n--- [b:2] ---\nfoo bar",
+        "\n=== END ADDITIONAL SOURCES ===",
+    ])
+    assert render_extra_context(units) == expected
+
+
+def test_source_relevance_empty_domain_returns_one():
+    # No domain terms (greenfield) -> can't judge -> don't penalize.
+    assert source_relevance("anything at all", frozenset()) == 1.0
+
+
+def test_source_relevance_discriminates_on_topic_from_off(tmp_path: Path):
+    terms = domain_terms_from_repomap(_build_repo_map_for(tmp_path))
+    assert "widget" in terms and "sprocket" in terms
+    on = source_relevance("the widget and the sprocket spin together", terms)
+    off = source_relevance("a recipe for chocolate chip cookies and milk", terms)
+    assert off == 0.0
+    assert on > off
+    assert off < LOW_RELEVANCE_ANNOTATE   # off-topic is flag-worthy
+
+
+def test_render_annotates_low_relevance_but_keeps_it(tmp_path: Path):
+    terms = domain_terms_from_repomap(_build_repo_map_for(tmp_path))
+    rendered = render_extra_context(
+        [_unit("cooking recipes and gardening tips", "off:1"),
+         _unit("widget sprocket assembly notes", "on:1")],
+        domain_terms=terms,
+    )
+    # off-topic kept but flagged; on-topic present and NOT flagged.
+    assert "[off:1]" in rendered and "low domain relevance" in rendered
+    assert "[on:1] ---" in rendered
+
+
+def test_render_optin_min_score_drops_off_topic(tmp_path: Path):
+    terms = domain_terms_from_repomap(_build_repo_map_for(tmp_path))
+    rendered = render_extra_context(
+        [_unit("cooking recipes and gardening tips", "off:1"),
+         _unit("widget sprocket assembly notes", "on:1")],
+        domain_terms=terms,
+        min_score=0.1,
+    )
+    assert "[off:1]" not in rendered   # dropped (opt-in)
+    assert "[on:1]" in rendered        # kept

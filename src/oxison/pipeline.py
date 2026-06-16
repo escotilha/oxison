@@ -18,10 +18,18 @@ from .comprehension_doc import build_comprehension_doc
 from .config import RunConfig
 from .generate import ARTIFACTS, GenerationError, generate
 from .manifest import RunManifest
-from .oxipensa_gate import DEFAULT_MAX_TASKS
+from .oxipensa_gate import DEFAULT_MAX_TASKS, DEFAULT_RELEVANCE_MIN_SCORE
 from .repomap import build_repo_map, estimate_tokens
 from .sources.base import SourceResult, SourceUnit
-from .sources.ingest import brief_unit, ingest_paths, ingest_urls, render_extra_context
+from .sources.ingest import (
+    LOW_RELEVANCE_ANNOTATE,
+    brief_unit,
+    domain_terms_from_repomap,
+    ingest_paths,
+    ingest_urls,
+    render_extra_context,
+    source_relevance,
+)
 
 COMPREHENSION_FILENAME = "COMPREHENSION.md"
 COMPREHENSION_JSON_FILENAME = "comprehension.json"
@@ -60,11 +68,24 @@ async def run_pipeline(cfg: RunConfig, manifest: RunManifest) -> int:
             stt_provider=cfg.stt_provider,
         )
         ingest_results = ing.results
-        extra_context = render_extra_context(ing.units)
+        # Repo mode: ground source relevance in the repo's own vocabulary so an
+        # off-topic input is flagged (abstain-safe: annotated, not dropped)
+        # rather than silently bloating the comprehension.
+        domain_terms = domain_terms_from_repomap(repo_map)
+        extra_context = render_extra_context(ing.units, domain_terms=domain_terms)
         for r in ing.results:
             flag = "✓" if r.status == "ok" else "·"
             note = "" if r.status == "ok" else f" (skipped: {r.reason})"
             print(f"  {flag} {r.source_type}: {r.origin}{note}")
+        low = [
+            u for u in ing.units
+            if source_relevance(u.text, domain_terms) < LOW_RELEVANCE_ANNOTATE
+        ]
+        if low and domain_terms:
+            print(
+                f"  ⚠ {len(low)} source(s) flagged low domain relevance "
+                "(kept, but marked for the comprehension worker to down-weight)"
+            )
     manifest.mark("ingest", "done", cost_usd=0.0)
 
     # --- Stage: comprehend (AI, read-only) ---
@@ -185,6 +206,7 @@ async def greenfield_pipeline(
     *,
     user_guidance: str = "",
     max_tasks: int = DEFAULT_MAX_TASKS,
+    relevance_min_score: float = DEFAULT_RELEVANCE_MIN_SCORE,
 ) -> int:
     """Oxideia: start from a brief + non-repo sources (NO repo) → comprehension
     + PRODUCT.md, then an initial ROADMAP. oxison owns every write.
@@ -278,6 +300,7 @@ async def greenfield_pipeline(
             generated_at=datetime.now(UTC).isoformat(),
             user_guidance=user_guidance,
             max_tasks=max_tasks,
+            relevance_min_score=relevance_min_score,
             greenfield=True,
         )
     except PlanError as exc:
@@ -287,6 +310,13 @@ async def greenfield_pipeline(
     _write(cfg.output_dir, ROADMAP_MD_FILENAME, render_roadmap_md(result.doc))
     note = "" if result.attempts == 1 else f" (after {result.attempts} attempts)"
     print(f"  ✓ {len(result.doc.tasks)} tasks planned{note} — ${result.cost_usd:.4f}")
+    if result.pruned:
+        print(
+            f"  ⤵ {len(result.pruned)} low-relevance task(s) pruned "
+            "(speculative / off-target):"
+        )
+        for task in result.pruned:
+            print(f"      · {task.title}  (relevance {task.relevance:.2f})")
 
     print()
     print(f"✓ greenfield plan in {cfg.output_dir}")

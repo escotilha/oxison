@@ -15,16 +15,21 @@ contract. oxison owns every write; the worker only reads and returns JSON.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .config import READ_ONLY_TOOLS, RunConfig
 from .dispatch import invoke
 from .jsonutil import JsonExtractError, extract_json_object
-from .oxipensa_gate import DEFAULT_MAX_TASKS, gate_roadmap
+from .oxipensa_gate import (
+    DEFAULT_MAX_TASKS,
+    DEFAULT_RELEVANCE_MIN_SCORE,
+    filter_by_relevance,
+    gate_roadmap,
+)
 from .prompts import roadmap_plan_prompt
-from .roadmap_doc import RoadmapDoc, build_roadmap_doc
+from .roadmap_doc import RoadmapDoc, RoadmapTask, build_roadmap_doc
 
 #: Per-attempt wall-clock timeout. Planning reads a comprehension and reasons;
 #: 15 min is generous for one pass.
@@ -49,6 +54,10 @@ class PlanResult:
     doc: RoadmapDoc
     cost_usd: float
     attempts: int
+    #: Tasks dropped by the plan-boundary relevance filter (below the floor and
+    #: not transitively needed by a kept task). Empty when nothing was pruned.
+    #: The CLI/pipeline surface this so a dropped task is visible, not silent.
+    pruned: list[RoadmapTask] = field(default_factory=list)
 
 
 def load_comprehension(path: Path) -> dict[str, Any]:
@@ -167,6 +176,7 @@ async def plan(
     generated_at: str,
     user_guidance: str = "",
     max_tasks: int = DEFAULT_MAX_TASKS,
+    relevance_min_score: float = DEFAULT_RELEVANCE_MIN_SCORE,
     greenfield: bool = False,
 ) -> PlanResult:
     """Produce a gated roadmap from a comprehension, self-correcting once.
@@ -174,6 +184,12 @@ async def plan(
     ``generated_at`` is stamped at the CLI boundary and threaded in (oxison
     never calls ``datetime.now()`` inside a library function). ``greenfield``
     reframes the plan as an initial from-scratch build (Oxideia).
+
+    ``relevance_min_score`` is the plan-boundary relevance floor: tasks the
+    planner self-scored below it (and not transitively needed by a kept task)
+    are pruned before the gate runs, so speculative gold-plating never becomes a
+    build contract. ``<= 0`` opts out (keep every task). The pruned tasks ride
+    back on :attr:`PlanResult.pruned` so the caller can surface them.
     """
     markdown = comprehension.get("comprehension_markdown") or comprehension.get(
         "comprehension", ""
@@ -221,12 +237,19 @@ async def plan(
             continue
 
         doc = build_roadmap_doc(raw=raw, source=source, generated_at=generated_at)
+        # Prune clearly off-target tasks BEFORE the gate. Transitive-keep means
+        # the survivor set is dependency-closed, so this never hands the gate a
+        # dangling dep — the filtered doc is always at least as gate-acceptable
+        # as the unfiltered one.
+        doc, pruned = filter_by_relevance(doc, min_score=relevance_min_score)
         gate = gate_roadmap(doc, max_tasks=max_tasks)
         if gate.ok:
             doc.open_questions = _merge_open_questions(
                 doc.open_questions, _open_questions_list(comprehension)
             )
-            return PlanResult(doc=doc, cost_usd=total_cost, attempts=attempt)
+            return PlanResult(
+                doc=doc, cost_usd=total_cost, attempts=attempt, pruned=pruned
+            )
         last_problem = "; ".join(gate.violations)
         prior_errors = gate.feedback()
 
