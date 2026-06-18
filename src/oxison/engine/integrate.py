@@ -47,9 +47,15 @@ async def integrate_branch(
     worktree: Path,
     title: str,
     identifier: str,
+    protected_branches: frozenset[str] = frozenset(),
 ) -> MergeOutcome:
     """Commit any dirty worktree state on ``branch``, then fast-forward the repo's
-    current branch onto it. See the module docstring for the safety invariant."""
+    current branch onto it. See the module docstring for the safety invariant.
+
+    ``protected_branches`` is an opt-in backstop: if the repo's current branch is
+    in the set, the integrator **refuses** rather than advance it in place (the
+    "never write main directly" invariant). Default is empty — callers that want
+    the guard pass it explicitly (``cmd_build`` passes ``{main, master}``)."""
     # (a) The worker may leave changes uncommitted; an uncommitted change in a
     # linked worktree is invisible to a merge from the repo root. Commit it first.
     rc, out = await git_cmd(["status", "--porcelain"], cwd=worktree)
