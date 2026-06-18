@@ -393,6 +393,25 @@ def _resolve_provider_key(args: argparse.Namespace) -> str | None:
     return None  # headless: let the builder raise the clear error
 
 
+def _warn_if_ocr(args: argparse.Namespace) -> None:
+    """Warn (once, to stderr) when ``--ocr`` is enabled.
+
+    The OCR adapter lazy-imports an optional ``document_extraction`` package and
+    runs its ``process_document`` on user files **in the main oxison process** —
+    before any sandbox or AI stage. That code executes with the invoking user's
+    full privileges, so the user must trust whatever provides that import. This
+    is a deliberate opt-in (the import is never an oxison dependency); the warning
+    just makes the trust boundary explicit at enable time.
+    """
+    if getattr(args, "ocr", False):
+        print(
+            "oxison: WARNING: --ocr executes third-party document_extraction code "
+            "with your full privileges, in the main process before any sandbox. "
+            "Only enable it with an OCR stack you trust.",
+            file=sys.stderr,
+        )
+
+
 def cmd_version(_args: argparse.Namespace) -> int:
     print(BANNER.format(version=__version__))
     return 0
@@ -475,6 +494,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         else:
             print(f"oxison: --sources: {args.sources!r} is not a directory, skipping")
     try:
+        _warn_if_ocr(args)
         cfg = build_run_config(
             target=args.target,
             output_dir=args.output_dir,
@@ -664,6 +684,7 @@ def cmd_ideate(args: argparse.Namespace) -> int:
         user_guidance = gpath.read_text(encoding="utf-8", errors="replace")
 
     try:
+        _warn_if_ocr(args)
         cfg = build_greenfield_config(
             output_dir=args.output_dir,
             bare=args.bare,
