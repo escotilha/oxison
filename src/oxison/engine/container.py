@@ -84,6 +84,20 @@ def resolve_container_runtime(configured: str | None = None) -> str | None:
     return None
 
 
+#: Generous default resource ceilings for the worker container (SECURITY-AUDIT.md
+#: F6). These are CEILINGS, not reservations: ``--memory`` caps RAM, so a high
+#: value never fails to start on a smaller host, and ``--pids-limit`` caps the
+#: process/thread count to stop a fork bomb. Both are orders of magnitude past any
+#: legitimate worker (a code-writing claude run + its tools), so they catch a
+#: runaway (memory exhaustion / fork bomb) without ever biting real use. NOT a
+#: ``--cpus`` throttle — that would slow every worker's wall-clock and could push
+#: a slow-but-legitimate worker past the 30-min timeout into a spurious failure;
+#: CPU starvation is a soft DoS the timeout already bounds. Override per run via
+#: ``EngineConfig`` if a host needs different ceilings; pass ``None`` to omit.
+DEFAULT_CONTAINER_MEMORY = "4g"
+DEFAULT_CONTAINER_PIDS_LIMIT = 2048
+
+
 def build_run_argv(
     *,
     runtime: str,
@@ -94,12 +108,18 @@ def build_run_argv(
     extra_env_names: Sequence[str] = (),
     srt_settings_host: Path | None = None,
     name: str | None = None,
+    memory: str | None = DEFAULT_CONTAINER_MEMORY,
+    pids_limit: int | None = DEFAULT_CONTAINER_PIDS_LIMIT,
 ) -> list[str]:
     """Build the ``podman run`` argv that runs the worker in the container.
 
     Containment knobs:
     - ``--rm`` ephemeral; ``--cap-drop ALL`` + ``--security-opt no-new-privileges``
       drop ambient privilege.
+    - ``--memory`` / ``--pids-limit`` (F6) cap RAM + process count at generous
+      ceilings so a runaway worker can't exhaust host memory or fork-bomb the box.
+      Ceilings, not reservations — a high ``--memory`` never fails to start on a
+      smaller host. ``None`` omits the flag.
     - ``workspace -> /work`` (rw) is the worker's only writable mount; nothing
       else from the host is visible.
     - ``srt_settings_host`` (when set) is bind-mounted **read-only** at
@@ -124,6 +144,10 @@ def build_run_argv(
         "-w", "/work",
         "-e", api_key_env,
     ]
+    if memory is not None:
+        argv += ["--memory", memory]
+    if pids_limit is not None:
+        argv += ["--pids-limit", str(pids_limit)]
     if srt_settings_host is not None:
         argv += ["-v", f"{srt_settings_host.resolve()}:{_CONTAINER_SRT_SETTINGS}:ro"]
     for env_name in extra_env_names:
