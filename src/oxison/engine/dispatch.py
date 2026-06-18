@@ -140,6 +140,60 @@ def worker_log_secrets(api_key: str | None, engine_config: EngineConfig) -> list
     return secrets
 
 
+#: Worker logs are capped at this size (SECURITY-AUDIT.md F8). A verbose or
+#: looping worker streams stdout/stderr straight to the log file via the kernel,
+#: so without a cap it can fill oxison-build/logs/ (and the disk) before the
+#: wall-clock timeout kills it. 8 MiB is far above any healthy worker's output
+#: while bounding a runaway.
+MAX_WORKER_LOG_BYTES = 8 * 1024 * 1024
+
+
+#: When capping, reserve this slice of the budget for the END of the log. The
+#: worker's stream-json ``result`` event (carrying ``total_cost_usd``, which
+#: ``extract_cost_from_log`` reads by scanning from the tail) is the LAST line —
+#: a head-only truncation would drop it and zero out cost accounting. 256 KiB is
+#: ample for the trailing result event(s).
+_LOG_TAIL_KEEP_BYTES = 256 * 1024
+
+
+def cap_log_size(log_path: Path, max_bytes: int = MAX_WORKER_LOG_BYTES) -> None:
+    """Truncate ``log_path`` to ~``max_bytes``, keeping the HEAD and the TAIL.
+
+    Runs after the worker exits (the file is no longer being written), so this
+    is a post-hoc cap, not a streaming limit — simple and sufficient against the
+    disk-fill DoS. The middle is dropped (with a marker); the head is kept (the
+    worker's plan + early actions) AND the tail is kept (the stream-json
+    ``result`` event that ``extract_cost_from_log`` reads from the end — a
+    head-only cap would lose it and zero out cost). Memory-bounded: reads at most
+    ``max_bytes`` total, so capping a giant log never itself OOMs. Fail-soft: any
+    OS error leaves the log untouched rather than crashing the run (mirrors
+    ``redact_secrets``).
+    """
+    try:
+        size = log_path.stat().st_size
+        if size <= max_bytes:
+            return
+    except OSError:
+        return
+    tail_keep = min(_LOG_TAIL_KEEP_BYTES, max_bytes // 2)
+    head_keep = max_bytes - tail_keep
+    marker = (
+        f"\n\n[oxison: log truncated — {size} bytes exceeded the {max_bytes}-byte "
+        f"cap; kept the first {head_keep} and last {tail_keep} bytes]\n\n"
+    )
+    try:
+        with open(log_path, "rb") as f:
+            head = f.read(head_keep)
+            f.seek(-tail_keep, os.SEEK_END)
+            tail = f.read(tail_keep)
+        with open(log_path, "wb") as f:
+            f.write(head)
+            f.write(marker.encode("utf-8"))
+            f.write(tail)
+    except OSError:
+        return
+
+
 def redact_secrets(log_path: Path, secrets: list[str]) -> None:
     """Replace any literal secret value with ``[REDACTED]`` in the worker log.
 
@@ -326,9 +380,12 @@ async def launch_worker(
             log_path=str(log_path),
         )
     finally:
-        # Redact any credential the worker surfaced into its log (M6/CWE-532) on
-        # EVERY exit path — in finally so an unexpected exception can't leave the
-        # key in the persisted log (fail-soft on a missing log).
+        # Cap the log first (F8) so a runaway worker can't have filled the disk,
+        # then redact — both on EVERY exit path, in finally, fail-soft. Capping
+        # before redaction also bounds the memory redact_secrets reads.
+        cap_log_size(log_path)
+        # Redact any credential the worker surfaced into its log (M6/CWE-532) so
+        # an unexpected exception can't leave the key in the persisted log.
         redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
 
     exit_code = proc.returncode
@@ -350,8 +407,10 @@ async def launch_worker(
 
 __all__ = [
     "DEFAULT_WORKER_TIMEOUT_S",
+    "MAX_WORKER_LOG_BYTES",
     "DispatchOutcome",
     "build_worker_prompt",
+    "cap_log_size",
     "launch_worker",
     "parse_changed_files",
     "redact_secrets",

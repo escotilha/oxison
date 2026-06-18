@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from oxison.engine.dispatch import (
+    MAX_WORKER_LOG_BYTES,
     build_worker_prompt,
+    cap_log_size,
     parse_changed_files,
     redact_secrets,
     worker_log_secrets,
 )
 from oxison.engine.engconfig import EngineConfig
+from oxison.engine.gitutil import extract_cost_from_log
 
 
 def test_prompt_encodes_acceptance_and_constraints():
@@ -102,6 +105,56 @@ def test_redact_secrets_noop_on_empty(tmp_path):
     redact_secrets(log, [])  # no secrets
     redact_secrets(log, [""])  # falsy secret filtered
     assert log.read_text(encoding="utf-8") == "nothing sensitive here\n"
+
+
+def test_cap_log_size_keeps_head_and_tail(tmp_path):
+    # SECURITY-AUDIT.md F8: an oversized log is truncated, keeping BOTH ends.
+    log = tmp_path / "worker.log"
+    log.write_text("HEAD-MARKER\n" + ("x" * 5000) + "\nTAIL-MARKER", encoding="utf-8")
+    cap_log_size(log, max_bytes=1000)
+    body = log.read_text(encoding="utf-8")
+    assert body.startswith("HEAD-MARKER")        # head kept
+    assert body.rstrip().endswith("TAIL-MARKER")  # tail kept
+    assert "log truncated" in body               # middle dropped, marker present
+    assert "x" * 5000 not in body                # the bulk is gone
+
+
+def test_cap_log_size_preserves_trailing_result_event(tmp_path):
+    # The critical regression guard: extract_cost_from_log scans from the tail
+    # for the stream-json `result` event. A head-only cap would drop it and zero
+    # out cost. Keeping the tail must preserve the cost line through capping.
+    log = tmp_path / "worker.log"
+    noise = "\n".join(f'{{"type":"text","s":"{i}"}}' for i in range(10000))
+    result = '{"type":"result","total_cost_usd":0.4242}'
+    log.write_text(noise + "\n" + result + "\n", encoding="utf-8")
+    cap_log_size(log, max_bytes=2000)
+    assert extract_cost_from_log(log) == 0.4242  # cost survived the cap
+
+
+def test_cap_log_size_noop_under_cap(tmp_path):
+    log = tmp_path / "worker.log"
+    original = "small log\n"
+    log.write_text(original, encoding="utf-8")
+    cap_log_size(log, max_bytes=MAX_WORKER_LOG_BYTES)
+    assert log.read_text(encoding="utf-8") == original  # untouched
+
+
+def test_cap_log_size_failsoft_on_missing_file(tmp_path):
+    # Missing log must not raise (mirrors redact_secrets fail-soft).
+    cap_log_size(tmp_path / "does-not-exist.log", max_bytes=10)
+
+
+def test_cap_log_size_is_memory_bounded(tmp_path):
+    # Capping reads at most max_bytes total (head_keep + tail_keep), never the
+    # whole file — a 10x-over file still caps to roughly the budget.
+    log = tmp_path / "worker.log"
+    log.write_bytes(b"A" * 9000 + b"B" * 1000)
+    cap_log_size(log, max_bytes=1000)
+    body = log.read_bytes()
+    assert body.startswith(b"A")           # head from the start
+    assert body.rstrip().endswith(b"B")    # tail from the end
+    # kept content is bounded by the budget (+ the small marker), not the 10k total.
+    assert len(body) < 2000
 
 
 def test_prompt_handles_no_acceptance_or_hints():
