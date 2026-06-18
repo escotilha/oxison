@@ -34,3 +34,6 @@ oxison-build/
 
 # CTO swarm review artifacts (internal engineering scratch) — never tracked
 .cto/
+
+# Grok agent memory/session state (auto-managed, holds a binary index) — never tracked
+.grok/
