@@ -82,6 +82,16 @@ def _static_adapters() -> list[SourceAdapter]:
     return [DocsAdapter(), PdfAdapter(), PptxAdapter(), DocxAdapter()]
 
 
+#: Skip a source file larger than this before handing it to a parser
+#: (SECURITY-AUDIT.md F7). The document parsers (pypdf/pptx/docx) run in the main
+#: process and have a history of size-correlated DoS (zip bombs, quadratic alloc,
+#: xref loops). A generous 64 MiB ceiling is far above any real doc a user feeds
+#: in while bounding a malicious one before the parser touches it. This is a
+#: pre-emptive guard, not a parse limit — a small-but-pathological file still
+#: relies on the catch-all net below (a parse timeout is a deferred follow-up).
+MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024
+
+
 def _safe_extract(adapter: SourceAdapter, path: Path) -> SourceResult:
     """Run adapter.extract, converting any unexpected error into a skip.
 
@@ -89,7 +99,19 @@ def _safe_extract(adapter: SourceAdapter, path: Path) -> SourceResult:
     never raised. Adapters already return skips for *expected* conditions
     (missing dep, no key, needs_ocr); this is the net for *unexpected*
     errors (a missing --add file, the recording stub, an adapter bug).
+
+    Oversized files are skipped *before* extraction (F7) so a malicious huge
+    document can't DoS the in-process parser.
     """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = None
+    if size is not None and size > MAX_SOURCE_FILE_BYTES:
+        return SourceResult.skip(
+            getattr(adapter, "name", "unknown"), str(path),
+            reason=f"file too large: {size} bytes > {MAX_SOURCE_FILE_BYTES} cap",
+        )
     try:
         return adapter.extract(path)
     except Exception as exc:  # noqa: BLE001 — deliberate catch-all net at the orchestrator boundary
