@@ -51,6 +51,14 @@ BANNER = r"""
   point it at a repo - get the product docs back
 """.strip("\n")
 
+# Help text for the --api-key flag, shared across subparsers. The DANGER note
+# steers users to the env var (SECURITY-AUDIT.md F2): a flag value is visible in
+# `ps`/argv for the parent process lifetime; an env var is not.
+_API_KEY_HELP = (
+    "API key for bare mode. DANGER: visible in ps/argv for the process "
+    "lifetime; prefer the OXISON_API_KEY / ANTHROPIC_API_KEY env var"
+)
+
 
 def _now_iso() -> str:
     """UTC timestamp, stamped once at the CLI boundary."""
@@ -79,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use --bare auth (ANTHROPIC_API_KEY) instead of your Claude Code login",
     )
-    run_p.add_argument("--api-key", default=None, help="API key for bare mode")
+    run_p.add_argument("--api-key", default=None, help=_API_KEY_HELP)
     run_p.add_argument("--model", default=None, help="override the Claude model")
     run_p.add_argument(
         "--provider", default=None, choices=provider_names(),
@@ -171,7 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use --bare auth (ANTHROPIC_API_KEY) instead of your Claude Code login",
     )
-    plan_p.add_argument("--api-key", default=None, help="API key for bare mode")
+    plan_p.add_argument("--api-key", default=None, help=_API_KEY_HELP)
     plan_p.add_argument("--model", default=None, help="override the Claude model")
     plan_p.add_argument(
         "--provider", default=None, choices=provider_names(),
@@ -239,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--bare", action="store_true",
         help="use --bare auth (ANTHROPIC_API_KEY) instead of your Claude Code login",
     )
-    ideate_p.add_argument("--api-key", default=None, help="API key for bare mode")
+    ideate_p.add_argument("--api-key", default=None, help=_API_KEY_HELP)
     ideate_p.add_argument("--model", default=None, help="override the Claude model")
     ideate_p.add_argument(
         "--provider", default=None, choices=provider_names(),
@@ -292,7 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
                               "main (forces --max-workers 1). Default: per-branch, no merge.")
     build_p.add_argument("--bare", action="store_true",
                          help="use --bare auth (ANTHROPIC_API_KEY) instead of your login")
-    build_p.add_argument("--api-key", default=None, help="API key for bare mode")
+    build_p.add_argument("--api-key", default=None, help=_API_KEY_HELP)
     build_p.add_argument("--model", default=None, help="override the Claude model")
     build_p.add_argument(
         "--provider", default=None, choices=provider_names(),
