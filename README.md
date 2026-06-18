@@ -349,8 +349,8 @@ From PyPI:
 ```bash
 pip install oxi-son                 # core CLI
 pip install 'oxi-son[sources]'      # + PDF / pptx / docx ingest
-# or zero-install:
-uvx oxi-son run /path/to/repo
+# or zero-install (note: package is oxi-son, command is oxison):
+uvx --from oxi-son oxison run /path/to/repo
 ```
 
 Or straight from the repo (always-latest / unreleased):

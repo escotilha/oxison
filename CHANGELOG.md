@@ -30,7 +30,7 @@ memory and a full external security-audit hardening pass.
   interpolated before the `<task_data>` fence opens, so the fence can't protect it;
   collapsing newlines stops a crafted repo name injecting into the role framing.
 
-#### External security audit (F1–F10)
+#### External security-audit hardening
 - **OCR dynamic-import RCE closed (F3, High).** `sources/ocr.py` imported
   `document_extraction` through a `sys.path` that included the CWD, so a file
   planted under an untrusted target repo could execute in the unsandboxed host
