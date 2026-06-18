@@ -1017,9 +1017,36 @@ def _load_pipeline_runner() -> Callable[[RunConfig, RunManifest], Coroutine[Any,
     return runner
 
 
+def _scrub_api_key_argv() -> None:
+    """Redact a ``--api-key`` value in-place in ``sys.argv`` (SECURITY-AUDIT.md F2).
+
+    A key passed as ``--api-key sk-...`` stays in the process's argv for its whole
+    lifetime — visible to ``ps``, ``/proc/self/cmdline``, and core dumps. The
+    parsed value lives on the ``args`` Namespace (the source of truth for every
+    downstream consumer), so overwriting the argv copy with ``[REDACTED]`` removes
+    the exposure without affecting behavior. Handles both ``--api-key VALUE`` and
+    ``--api-key=VALUE``; ``--stt-key`` gets the same treatment.
+    """
+    for flag in ("--api-key", "--stt-key"):
+        i = 0
+        while i < len(sys.argv):
+            tok = sys.argv[i]
+            if tok == flag and i + 1 < len(sys.argv):
+                sys.argv[i + 1] = "[REDACTED]"
+                i += 2
+            elif tok.startswith(flag + "="):
+                sys.argv[i] = f"{flag}=[REDACTED]"
+                i += 1
+            else:
+                i += 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Scrub any credential from the process argv immediately after parsing — the
+    # real value is on `args`, which is what every consumer reads (F2).
+    _scrub_api_key_argv()
     if not getattr(args, "command", None):
         print(BANNER.format(version=__version__))
         print()
