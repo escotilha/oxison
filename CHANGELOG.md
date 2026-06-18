@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-18
+
+First public PyPI release (`pip install oxi-son`). Folds in cross-run build
+memory and a full external security-audit hardening pass.
+
 ### Added
 - **Cross-run memory is now wired into the build loop (#37).** `oxison build`
   captures grader-verified outcomes to `oxison-build/memory.db` and front-loads
@@ -24,6 +29,40 @@
 - **`repo_name` newlines are collapsed in the worker-prompt preamble** (N1) — it's
   interpolated before the `<task_data>` fence opens, so the fence can't protect it;
   collapsing newlines stops a crafted repo name injecting into the role framing.
+
+#### External security-audit hardening
+- **OCR dynamic-import RCE closed (F3, High).** `sources/ocr.py` imported
+  `document_extraction` through a `sys.path` that included the CWD, so a file
+  planted under an untrusted target repo could execute in the unsandboxed host
+  process via `--ocr`. The loader now strips CWD-relative `sys.path` entries for
+  the import and rejects any module resolving under the CWD; `--ocr` also emits a
+  one-time privilege warning (F3 mitigation).
+- **Build-worker base image pinned (F1, High).** `@anthropic-ai/claude-code` and
+  `@anthropic-ai/sandbox-runtime` are pinned (via `ARG`) in the worker Dockerfile
+  so the single untrusted-content execution surface is deliberate and auditable.
+- **`--api-key` argv exposure flagged (F2, High).** Help text on all four
+  subcommands now warns that a key passed as argv is visible in `ps`/shell
+  history/CI logs and steers to the `OXISON_API_KEY`/`ANTHROPIC_API_KEY` env var.
+- **Lockfiles + CI configs are now protected paths (F4).** `DEFAULT_PROTECTED_PATHS`
+  gained `uv.lock`, `go.sum`, `Gemfile.lock`, `Pipfile.lock`, `composer.lock`, and
+  CI config dirs — a build worker can no longer tamper with dependency pins or the
+  pipeline (enforced identically by the plan-gate and the post-diff grader).
+- **`oxison build` gates direct roadmaps on protected paths (F5, Med).** A
+  hand-crafted/tampered roadmap fed straight to `build` now fails at ingest if any
+  task's `files_hint` targets a protected path, using the same matcher as the
+  grader — failing before any worker budget is spent.
+- **Worker container resource ceilings (F6).** Layer-2 workers run with
+  `--memory 4g` + `--pids-limit 2048` by default (config-overridable) to bound a
+  runaway worker (memory exhaustion / fork bomb).
+- **Document-parser DoS surface bounded (F7).** Optional parser floors raised to
+  patched releases (`pypdf>=6.13.3`, `python-pptx>=1.0.2`, `python-docx>=1.2`),
+  `pypdf` bumped 6.13.2 → 6.13.3 (GHSA-jm82-fx9c-mx94), and a 64 MiB size cap skips
+  oversized files before they reach an in-process parser.
+- **Worker log size capped (F8, Low).** Logs are truncated at 8 MiB
+  (`MAX_WORKER_LOG_BYTES`) in the worker-exit `finally` block so a verbose/looping
+  worker can't fill the disk.
+- **Unused PyYAML dropped (F10, Low).** It was the only base dependency and never
+  imported — base deps are now `[]`.
 
 ### Internal
 - Added isolation tests for `extract_cost_from_log` (the C3 budget-floor path) —
