@@ -26,6 +26,16 @@ from .types import DispatchOutcome
 
 Integrator = Callable[[Task, DispatchOutcome], Awaitable["MergeOutcome"]]
 
+#: Branches the integrator must never fast-forward in place — the "never write
+#: main directly" invariant. ``cmd_build`` redirects onto ``INTEGRATION_BRANCH``
+#: when the repo sits on one of these, and arms the ``integrate_branch`` backstop
+#: with the same set.
+DEFAULT_PROTECTED_BRANCHES = frozenset({"main", "master"})
+
+#: Dedicated branch the build loop composes onto when the live branch is protected,
+#: so the user's main/master is never advanced in place.
+INTEGRATION_BRANCH = "oxison/integration"
+
 
 @dataclass
 class MergeOutcome:
@@ -47,9 +57,19 @@ async def integrate_branch(
     worktree: Path,
     title: str,
     identifier: str,
+    protected_branches: frozenset[str] = frozenset(),
 ) -> MergeOutcome:
     """Commit any dirty worktree state on ``branch``, then fast-forward the repo's
-    current branch onto it. See the module docstring for the safety invariant."""
+    current branch onto it. See the module docstring for the safety invariant.
+
+    ``protected_branches`` is a defense-in-depth backstop on the "never advance a
+    protected branch in place" invariant: if the repo's current branch (resolved
+    from HEAD) is in the set, the integrator **refuses** rather than fast-forward
+    it. The primary mechanism lives at the caller — ``cmd_build`` checks out a
+    dedicated integration branch up front (see ``ensure_integration_branch``) so
+    the live branch is never the merge target — and arms this backstop with
+    ``DEFAULT_PROTECTED_BRANCHES`` in case that redirect is ever bypassed. Default
+    is empty (no protection), preserving the bare ``integrate_branch`` contract."""
     # (a) The worker may leave changes uncommitted; an uncommitted change in a
     # linked worktree is invisible to a merge from the repo root. Commit it first.
     rc, out = await git_cmd(["status", "--porcelain"], cwd=worktree)
@@ -69,6 +89,18 @@ async def integrate_branch(
     if rc != 0 or not target:
         return MergeOutcome(ok=False, reason="repo is in detached HEAD; cannot integrate")
 
+    # (b2) Backstop: never fast-forward a protected branch in place. Should not
+    # fire in the normal flow (cmd_build redirects onto a dedicated branch first),
+    # but enforces the invariant at the primitive for any caller that doesn't.
+    if target in protected_branches:
+        return MergeOutcome(
+            ok=False,
+            reason=(
+                f"refusing to advance protected branch {target!r} in place "
+                "(never write main directly); integrate onto a dedicated branch"
+            ),
+        )
+
     # (c) Fast-forward only. Always a ff at max_workers=1; refuses cleanly otherwise.
     rc, msg = await git_cmd(["merge", "--ff-only", branch], cwd=repo)
     if rc == 0:
@@ -85,8 +117,13 @@ async def integrate_branch(
     )
 
 
-def make_integrator(repo: Path) -> Integrator:
-    """Bind an integrator to ``repo``'s root working tree for the build loop."""
+def make_integrator(
+    repo: Path, *, protected_branches: frozenset[str] = frozenset()
+) -> Integrator:
+    """Bind an integrator to ``repo``'s root working tree for the build loop.
+
+    ``protected_branches`` is forwarded to ``integrate_branch`` as the
+    never-advance-in-place backstop (see its docstring)."""
 
     async def integrate(task: Task, outcome: DispatchOutcome) -> MergeOutcome:
         return await integrate_branch(
@@ -95,9 +132,58 @@ def make_integrator(repo: Path) -> Integrator:
             worktree=Path(outcome.worktree_path),
             title=task.title,
             identifier=task.identifier,
+            protected_branches=protected_branches,
         )
 
     return integrate
 
 
-__all__ = ["Integrator", "MergeOutcome", "integrate_branch", "make_integrator"]
+async def current_branch(repo: Path) -> str | None:
+    """The repo's checked-out branch name, or None if detached / unresolved."""
+    rc, out = await git_cmd(["symbolic-ref", "--short", "HEAD"], cwd=repo)
+    name = out.strip()
+    return name if rc == 0 and name else None
+
+
+async def ensure_integration_branch(
+    repo: Path, *, base_branch: str, integration_branch: str = INTEGRATION_BRANCH
+) -> tuple[bool, str]:
+    """Check out ``integration_branch`` so the loop composes onto it instead of the
+    live branch. If it doesn't exist, create it from the current HEAD. If it already
+    exists (a prior run), reuse it ONLY when ``base_branch`` is fully contained in it
+    (an ancestor); otherwise it predates commits on the live branch — reusing it
+    would build on a stale base and turn the final merge into a 3-way — so refuse
+    with guidance instead. The working tree must be clean (``cmd_build`` enforces
+    this). Returns ``(ok, message)``; on success ``message`` is the branch name, on
+    failure a human-readable reason."""
+    rc, _ = await git_cmd(
+        ["rev-parse", "--verify", "--quiet", f"refs/heads/{integration_branch}"], cwd=repo
+    )
+    if rc != 0:
+        rc, msg = await git_cmd(["checkout", "-b", integration_branch], cwd=repo)
+        return (rc == 0, integration_branch if rc == 0 else msg.strip()[:200])
+    # Exists: reuse only if it already contains the live branch (no stale base).
+    rc_anc, _ = await git_cmd(
+        ["merge-base", "--is-ancestor", base_branch, integration_branch], cwd=repo
+    )
+    if rc_anc != 0:
+        return (
+            False,
+            f"{integration_branch!r} is stale / has diverged from {base_branch!r} "
+            f"(it predates commits on {base_branch!r}); merge it into {base_branch!r} "
+            f"or delete it (git branch -D {integration_branch}), then re-run",
+        )
+    rc, msg = await git_cmd(["checkout", integration_branch], cwd=repo)
+    return (rc == 0, integration_branch if rc == 0 else msg.strip()[:200])
+
+
+__all__ = [
+    "DEFAULT_PROTECTED_BRANCHES",
+    "INTEGRATION_BRANCH",
+    "Integrator",
+    "MergeOutcome",
+    "current_branch",
+    "ensure_integration_branch",
+    "integrate_branch",
+    "make_integrator",
+]

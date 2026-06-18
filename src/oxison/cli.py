@@ -804,14 +804,25 @@ def cmd_build(args: argparse.Namespace) -> int:
             print(f"   · {hit}")
         return 2
 
-    # --integrate composes the roadmap into one product on main: each graded
-    # branch is git-merged as it passes. It requires sequential dispatch (so each
-    # task branches from the accumulated main), so it forces --max-workers 1.
+    # --integrate composes the roadmap into one product as each graded branch is
+    # git-merged. It requires sequential dispatch (so each task branches from the
+    # accumulated tip), so it forces --max-workers 1. To honour "never write main
+    # directly", when the repo sits on a protected branch (main/master) the loop
+    # composes onto a dedicated integration branch and leaves the live branch
+    # untouched for the user to merge; the original branch is restored at the end.
     integrator = None
+    integration_target: str | None = None      # branch we compose onto, if redirected
+    restore_branch: str | None = None          # branch to switch back to at the end
     if args.integrate:
         import subprocess
 
-        from .engine.integrate import make_integrator
+        from .engine.integrate import (
+            DEFAULT_PROTECTED_BRANCHES,
+            INTEGRATION_BRANCH,
+            current_branch,
+            ensure_integration_branch,
+            make_integrator,
+        )
 
         dirty = subprocess.run(
             ["git", "-C", str(repo), "status", "--porcelain"],
@@ -819,8 +830,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         )
         if dirty.returncode == 0 and dirty.stdout.strip():
             print(
-                "oxison: --integrate needs a clean working tree on the repo's main "
-                "branch (uncommitted changes would block the fast-forward merge).\n"
+                "oxison: --integrate needs a clean working tree (uncommitted changes "
+                "would block the fast-forward merge).\n"
                 "  commit or stash them, then re-run."
             )
             return 2
@@ -828,7 +839,28 @@ def cmd_build(args: argparse.Namespace) -> int:
             print(f"  note: --integrate forces --max-workers 1 (was {args.max_workers}); "
                   "parallel integration is not yet supported.")
         args.max_workers = 1
-        integrator = make_integrator(repo)
+        # Redirect off a protected branch onto a dedicated one (never advance main
+        # in place). Skipped on --dry-run (no side effects). Detached HEAD fails
+        # early rather than once-per-task. On a non-protected branch, integrate
+        # onto it as before.
+        if not args.dry_run:
+            live = asyncio.run(current_branch(repo))
+            if live is None:
+                print("oxison: --integrate needs a checked-out branch (the repo is in "
+                      "detached HEAD). Check out a branch, then re-run.")
+                return 2
+            if live in DEFAULT_PROTECTED_BRANCHES:
+                ok, msg = asyncio.run(
+                    ensure_integration_branch(
+                        repo, base_branch=live, integration_branch=INTEGRATION_BRANCH
+                    )
+                )
+                if not ok:
+                    print(f"oxison: {msg}")
+                    return 3
+                integration_target = INTEGRATION_BRANCH
+                restore_branch = live
+        integrator = make_integrator(repo, protected_branches=DEFAULT_PROTECTED_BRANCHES)
 
     store = TaskStore.open(repo)
     ingest = ingest_roadmap(store, roadmap)
@@ -981,8 +1013,12 @@ def cmd_build(args: argparse.Namespace) -> int:
     else:
         print("  memory        : off (--no-memory)")
     if integrator is not None:
-        print("  integrate     : ON — each graded branch is merged into "
-              f"{repo.name}'s current branch (main accumulates)")
+        if integration_target is not None:
+            print(f"  integrate     : ON — composing onto {integration_target!r}; "
+                  f"protected {restore_branch!r} is left untouched (merge it when ready)")
+        else:
+            print("  integrate     : ON — each graded branch is fast-forwarded onto "
+                  "the current branch")
     print("\n→ BUILD MODE — workers WRITE code in isolated worktrees under "
           "oxison-build/worktrees/\n")
 
@@ -996,6 +1032,17 @@ def cmd_build(args: argparse.Namespace) -> int:
     finally:
         if mem_store is not None:
             mem_store.close()
+        # Restore the user's original branch; the composed work stays on the
+        # integration branch for them to merge. Best-effort — never mask a loop error.
+        if restore_branch is not None:
+            import subprocess
+            rc = subprocess.run(
+                ["git", "-C", str(repo), "checkout", restore_branch],
+                capture_output=True, text=True, check=False,
+            )
+            if rc.returncode != 0:
+                print(f"  note: could not restore branch {restore_branch!r} (you are on "
+                      f"{integration_target!r}): {rc.stderr.strip()[:160]}", file=sys.stderr)
 
     print(f"\n✓ build loop halted: {summary.halt_reason}")
     print(f"  ticks={summary.ticks} dispatched={summary.dispatched} "
@@ -1003,7 +1050,12 @@ def cmd_build(args: argparse.Namespace) -> int:
           f"integrated={summary.integrated} spent=${summary.spent_usd:.4f}")
     print(f"  taskstore: {store.status_counts()}")
     if integrator is not None and summary.integrated:
-        print(f"  ✓ main now holds {summary.integrated} integrated task(s)")
+        if integration_target is not None:
+            print(f"  ✓ {integration_target!r} holds {summary.integrated} integrated "
+                  f"task(s) — review, then merge into {restore_branch!r}:")
+            print(f"      git merge {integration_target}")
+        else:
+            print(f"  ✓ the current branch now holds {summary.integrated} integrated task(s)")
     return 0
 
 

@@ -3,12 +3,50 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import types
 from pathlib import Path
+
+import pytest
 
 import oxison.cli as cli
 import oxison.engine.loop as engine_loop
 from oxison.engine.loop import LoopSummary
+
+
+def _real_git_repo(tmp_path: Path) -> Path:
+    """A real git repo on `main` with one commit — needed for the --integrate
+    redirect path, which runs real git (current_branch / ensure_integration_branch)."""
+    repo = tmp_path / "gitrepo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+    (repo / "README.md").write_text("base\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "init"], check=True)
+    return repo
+
+
+def _branch(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "symbolic-ref", "--short", "HEAD"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _branch_exists(repo: Path, name: str) -> bool:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"refs/heads/{name}"],
+        capture_output=True, text=True,
+    ).returncode == 0
+
+
+def _head(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
 
 
 def _git_repo(tmp_path: Path) -> Path:
@@ -246,3 +284,47 @@ def test_build_no_sandbox_warns_and_runs(tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert "UNSANDBOXED" in captured.err  # the warning is on stderr
     assert "sandbox       : OFF" in captured.out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+def test_build_integrate_redirects_to_branch_and_restores(tmp_path, monkeypatch, capsys):
+    """On a protected branch, --integrate composes onto oxison/integration, leaves
+    main unmoved, and restores the user to main at the end."""
+    repo = _real_git_repo(tmp_path)
+    rm = _write_roadmap(tmp_path)
+    main_head = _head(repo)
+    monkeypatch.setattr(
+        cli, "preflight", lambda cfg: types.SimpleNamespace(claude_version="test")
+    )
+    import oxison.engine.sandbox as sb
+    monkeypatch.setattr(sb, "resolve_srt_binary", lambda configured=None: "/fake/srt")
+
+    async def fake_loop(store, **kwargs):
+        return LoopSummary(ticks=1, dispatched=1, merged=1, failed=0,
+                           spent_usd=1.0, halt_reason="complete", integrated=1)
+    monkeypatch.setattr(engine_loop, "run_build_loop", fake_loop)
+
+    args = cli.build_parser().parse_args(
+        ["build", str(rm), "--repo", str(repo), "--integrate"]
+    )
+    rc = args.func(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert _branch(repo) == "main"                       # original branch restored
+    assert _branch_exists(repo, "oxison/integration")    # redirect target created
+    assert _head(repo) == main_head                      # main NEVER advanced
+    assert "oxison/integration" in out                   # reporting points at it
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+def test_build_integrate_dry_run_has_no_side_effect(tmp_path, capsys):
+    """--integrate --dry-run must not check out / create the integration branch."""
+    repo = _real_git_repo(tmp_path)
+    rm = _write_roadmap(tmp_path)
+    args = cli.build_parser().parse_args(
+        ["build", str(rm), "--repo", str(repo), "--integrate", "--dry-run"]
+    )
+    rc = args.func(args)
+    assert rc == 0
+    assert _branch(repo) == "main"                       # still on main
+    assert not _branch_exists(repo, "oxison/integration")  # no branch created
