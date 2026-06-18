@@ -118,3 +118,24 @@ def test_C1_bare_protected_directory_rejected_by_both():
         assert not grade_diff([path], protected_paths=PROTECTED).ok, path
         violations = gate_roadmap(_doc_with_hint(path)).violations
         assert any("protected path" in v for v in violations), path
+
+
+@pytest.mark.parametrize("path", [
+    "uv.lock",              # oxison's own lockfile — the headline gap
+    "go.sum",
+    "Gemfile.lock",
+    "Pipfile.lock",
+    "composer.lock",
+    ".gitlab-ci.yml",
+    ".circleci/config.yml",
+    "Jenkinsfile",
+    "azure-pipelines.yml",
+    ".github/dependabot.yml",
+])
+def test_C1_lockfile_and_ci_paths_rejected_by_both(path):
+    # A prompt-injected (or hand-crafted direct-build) worker must not be able
+    # to tamper with a dependency lockfile or CI pipeline. Both the grader and
+    # the plan-gate reject these, same as any other protected path (C1 parity).
+    assert not grade_diff([path], protected_paths=PROTECTED).ok, path
+    violations = gate_roadmap(_doc_with_hint(path)).violations
+    assert any("protected path" in v for v in violations), path
