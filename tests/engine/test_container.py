@@ -7,6 +7,8 @@ import os
 import pytest
 
 from oxison.engine.container import (
+    DEFAULT_CONTAINER_MEMORY,
+    DEFAULT_CONTAINER_PIDS_LIMIT,
     DEFAULT_WORKER_IMAGE,
     build_run_argv,
     resolve_container_runtime,
@@ -36,6 +38,42 @@ def test_run_argv_mounts_only_the_workspace_and_drops_privilege(tmp_path):
     # the inner claude argv comes after the image
     img_i = argv.index(DEFAULT_WORKER_IMAGE)
     assert argv[img_i + 1:] == ["claude", "-p", "--bare", "hi"]
+
+
+def test_run_argv_applies_resource_limits_by_default(tmp_path):
+    # SECURITY-AUDIT.md F6: generous memory + pids ceilings cap a runaway worker
+    # (memory exhaustion / fork bomb) without throttling legitimate use.
+    ws = tmp_path / "clone"
+    ws.mkdir()
+    argv = build_run_argv(
+        runtime="/usr/bin/podman", image=DEFAULT_WORKER_IMAGE, workspace=ws,
+        inner_argv=["claude", "-p", "--bare", "hi"],
+    )
+    assert argv[argv.index("--memory") + 1] == DEFAULT_CONTAINER_MEMORY
+    assert argv[argv.index("--pids-limit") + 1] == str(DEFAULT_CONTAINER_PIDS_LIMIT)
+    # NOT a --cpus throttle (would interact with the wall-clock timeout)
+    assert "--cpus" not in argv
+    # limits come before the image; inner argv stays after it
+    img_i = argv.index(DEFAULT_WORKER_IMAGE)
+    assert argv[img_i + 1:] == ["claude", "-p", "--bare", "hi"]
+
+
+def test_run_argv_resource_limits_overridable_and_omittable(tmp_path):
+    ws = tmp_path / "clone"
+    ws.mkdir()
+    # explicit override
+    argv = build_run_argv(
+        runtime="podman", image="img", workspace=ws, inner_argv=["x"],
+        memory="8g", pids_limit=4096,
+    )
+    assert argv[argv.index("--memory") + 1] == "8g"
+    assert argv[argv.index("--pids-limit") + 1] == "4096"
+    # None omits the flag entirely
+    argv2 = build_run_argv(
+        runtime="podman", image="img", workspace=ws, inner_argv=["x"],
+        memory=None, pids_limit=None,
+    )
+    assert "--memory" not in argv2 and "--pids-limit" not in argv2
 
 
 def test_run_argv_forwards_provider_env_names(tmp_path):
