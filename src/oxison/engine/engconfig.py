@@ -43,6 +43,18 @@ DEFAULT_PROTECTED_PATHS: tuple[str, ...] = (
     "yarn.lock",
     "poetry.lock",
     "Cargo.lock",
+    "uv.lock",  # oxison itself uses uv + ships this lockfile
+    "go.sum",
+    "Gemfile.lock",
+    "Pipfile.lock",
+    "composer.lock",
+    # CI / pipeline definitions (a tampered pipeline is a supply-chain vector).
+    # File rules match by exact segment name; directory rules end in "/".
+    ".gitlab-ci.yml",
+    ".circleci/",
+    "Jenkinsfile",
+    "azure-pipelines.yml",
+    "dependabot.yml",  # .github/dependabot.yml — matched by filename segment
 )
 
 
