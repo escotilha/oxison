@@ -4,8 +4,7 @@
 
 ## [0.6.0] — 2026-06-18
 
-First public PyPI release (`pip install oxi-son`). Folds in cross-run build
-memory and a full external security-audit hardening pass.
+Folds in cross-run build memory and a full external security-audit hardening pass.
 
 ### Added
 - **Cross-run memory is now wired into the build loop (#37).** `oxison build`
