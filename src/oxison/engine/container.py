@@ -39,6 +39,7 @@ from .dispatch import (
     DEFAULT_WORKER_TIMEOUT_S,
     DispatchOutcome,
     build_worker_prompt,
+    cap_log_size,
     redact_secrets,
     worker_log_secrets,
 )
@@ -333,9 +334,11 @@ async def launch_worker_container(
         # outlive a timeout (holding the clone + the API key in its env). Force-
         # remove it by name unconditionally (idempotent on a clean --rm exit).
         await remove_container(runtime, container_name)
-        # Redact any credential the worker surfaced into its log (M6/CWE-532) on
-        # EVERY exit path — in finally so an unexpected exception can't leave the
-        # key in the persisted log.
+        # Cap the log first (F8) so a runaway worker can't have filled the disk,
+        # then redact — both on EVERY exit path, in finally, fail-soft.
+        cap_log_size(log_path)
+        # Redact any credential the worker surfaced into its log (M6/CWE-532) so
+        # an unexpected exception can't leave the key in the persisted log.
         redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
 
     exit_code = proc.returncode
