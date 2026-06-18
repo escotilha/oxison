@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- **`oxison build --integrate` never advances `main`/`master` in place.** When the
+  repo is on a protected branch, the loop now composes the graded roadmap onto a
+  dedicated `oxison/integration` branch and restores your original branch at the
+  end — leaving `main` untouched for you to review and `git merge` yourself. On a
+  non-protected branch it integrates onto that branch as before. Backed by a
+  defense-in-depth backstop in `integrate_branch` (`protected_branches`) that
+  refuses to fast-forward a protected branch even if the redirect is bypassed.
+
 ## [0.6.0] — 2026-06-18
 
 Folds in cross-run build memory and a full external security-audit hardening pass.
