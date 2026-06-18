@@ -344,13 +344,22 @@ documented follow-on; this is the contract-driven core that takes a roadmap from
 
 ## Install
 
-Install straight from this repo — no PyPI needed:
+From PyPI:
 
 ```bash
-# zero-install, always-latest (recommended)
+pip install oxi-son                 # core CLI
+pip install 'oxi-son[sources]'      # + PDF / pptx / docx ingest
+# or zero-install:
+uvx oxi-son run /path/to/repo
+```
+
+Or straight from the repo (always-latest / unreleased):
+
+```bash
+# zero-install, always-latest
 uvx --from git+https://github.com/escotilha/oxison oxison run /path/to/repo
 # pin to a release
-pip install "git+https://github.com/escotilha/oxison.git@v0.5.0"
+pip install "git+https://github.com/escotilha/oxison.git@v0.6.0"
 ```
 
 Or from a local clone:
