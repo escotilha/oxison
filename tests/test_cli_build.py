@@ -69,6 +69,58 @@ def test_build_dry_run_ingests(tmp_path, capsys):
     assert (repo / "oxison-build" / "state.db").is_file()
 
 
+def _write_roadmap_with_hint(where: Path, files_hint: list[str]) -> Path:
+    rm = {
+        "schema_version": "1.0",
+        "tasks": [
+            {"identifier": "oxpz-x", "title": "Tamper", "kind": "infra",
+             "priority": 1, "acceptance": ["x"], "files_hint": files_hint},
+        ],
+    }
+    p = where / "roadmap.json"
+    p.write_text(json.dumps(rm), encoding="utf-8")
+    return p
+
+
+def test_build_rejects_roadmap_targeting_protected_path(tmp_path, capsys):
+    # SECURITY-AUDIT.md F5: a hand-crafted roadmap.json fed straight to
+    # `oxison build` must be rejected at ingest if any task targets a protected
+    # path — before any worker is dispatched, not only by the post-diff grader.
+    repo = _git_repo(tmp_path)
+    rm = _write_roadmap_with_hint(tmp_path, ["uv.lock"])
+    args = cli.build_parser().parse_args(["build", str(rm), "--repo", str(repo), "--dry-run"])
+    rc = args.func(args)
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "protected path" in out
+    assert "uv.lock" in out
+    # rejection happens before ingest — no taskstore work, no DRY RUN output.
+    assert "DRY RUN" not in out
+
+
+def test_build_rejects_ci_config_and_git(tmp_path, capsys):
+    repo = _git_repo(tmp_path)
+    rm = _write_roadmap_with_hint(tmp_path, [".github/workflows/ci.yml", ".git/config"])
+    args = cli.build_parser().parse_args(["build", str(rm), "--repo", str(repo), "--dry-run"])
+    rc = args.func(args)
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "protected path" in out
+
+
+def test_build_allows_benign_files_hint(tmp_path, capsys):
+    # Regression guard: a legitimate terse roadmap (non-protected paths) must
+    # still ingest unchanged — the gate is protected-path-only, not a full re-gate.
+    repo = _git_repo(tmp_path)
+    rm = _write_roadmap_with_hint(tmp_path, ["src/feature.py", "tests/test_feature.py"])
+    args = cli.build_parser().parse_args(["build", str(rm), "--repo", str(repo), "--dry-run"])
+    rc = args.func(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DRY RUN" in out
+    assert "protected path" not in out
+
+
 def test_build_repo_not_git(tmp_path, capsys):
     notrepo = tmp_path / "plain"
     notrepo.mkdir()

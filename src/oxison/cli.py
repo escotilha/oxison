@@ -774,6 +774,36 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"oxison: {exc}")
         return 2
 
+    # Protected-path gate for direct-build (SECURITY-AUDIT.md F5). The planner
+    # path runs the full plan-gate before a roadmap is ever written; a hand-crafted
+    # or tampered roadmap.json fed straight to `oxison build` skipped it, so a task
+    # could declare a protected files_hint (a lockfile, CI config, .git/) and spend
+    # worker budget before the grader's post-diff backstop caught the write. Reject
+    # at ingest time instead — fail early, before any dispatch. The grader
+    # (grade_diff, same is_protected_path matcher) remains the authoritative
+    # backstop on the actual diff; this only narrows the window. We check the raw
+    # files_hint with the identical coercion ingest_roadmap uses, so the gate sees
+    # exactly the paths that would be persisted.
+    from .engine.protected import is_protected_path
+
+    protected = EngineConfig().protected_paths
+    protected_hits: list[str] = []
+    for t in roadmap.get("tasks", []):
+        if not isinstance(t, dict):
+            continue
+        ident = t.get("identifier") or t.get("title") or "?"
+        for fpath in t.get("files_hint", []):
+            if isinstance(fpath, str) and is_protected_path(fpath, protected):
+                protected_hits.append(f"{ident}: {fpath}")
+    if protected_hits:
+        print(
+            "oxison: roadmap rejected — tasks target protected paths "
+            "(lockfiles / CI / .git etc.); refusing to dispatch:"
+        )
+        for hit in protected_hits:
+            print(f"   · {hit}")
+        return 2
+
     # --integrate composes the roadmap into one product on main: each graded
     # branch is git-merged as it passes. It requires sequential dispatch (so each
     # task branches from the accumulated main), so it forces --max-workers 1.
