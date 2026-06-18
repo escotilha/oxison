@@ -51,7 +51,7 @@ Layer 2 also requires an explicit API key — the host Keychain is not reachable
 To ingest PDFs, Word documents, or PowerPoint files alongside a repo:
 
 ```bash
-pip install 'oxi-son[sources]'
+pip install "oxi-son[sources] @ git+https://github.com/escotilha/oxison.git"
 ```
 
 ---
@@ -366,7 +366,7 @@ The deterministic map (no AI, no cost) always re-runs. All AI steps already reco
 Mix PDFs, slide decks, and Word documents into the comprehension pass:
 
 ```bash
-pip install 'oxi-son[sources]'
+pip install "oxi-son[sources] @ git+https://github.com/escotilha/oxison.git"
 
 oxison run ~/code/myproject \
   --add docs/architecture.pdf \
@@ -530,10 +530,11 @@ Inspect `<repo>/oxison-build/logs/<task-id>.log` for the failed worker's output.
 A `--add` or `--sources` file was skipped because the matching adapter package is absent. Install the extras:
 
 ```bash
-pip install 'oxi-son[sources]'   # PDF + pptx + docx
-pip install 'oxi-son[pdf]'       # PDF only
-pip install 'oxi-son[pptx]'      # PowerPoint only
-pip install 'oxi-son[docx]'      # Word only
+# from a git install, use the "name[extra] @ git+URL" form:
+pip install "oxi-son[sources] @ git+https://github.com/escotilha/oxison.git"  # PDF + pptx + docx
+pip install "oxi-son[pdf] @ git+https://github.com/escotilha/oxison.git"      # PDF only
+pip install "oxi-son[pptx] @ git+https://github.com/escotilha/oxison.git"     # PowerPoint only
+pip install "oxi-son[docx] @ git+https://github.com/escotilha/oxison.git"     # Word only
 ```
 
 OCR for scanned PDFs (`--ocr`) requires an optional, unpublished `document_extraction` package, which is not an oxison dependency. Without it, scanned PDFs are logged as skipped.

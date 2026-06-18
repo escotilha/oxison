@@ -202,7 +202,8 @@ programmatically.
 ### Installing the source adapters
 
 ```bash
-pip install 'oxi-son[sources]'   # adds PDF, pptx, and docx support
+# adds PDF, pptx, and docx support (the [sources] extra on the git install)
+pip install "oxi-son[sources] @ git+https://github.com/escotilha/oxison.git"
 ```
 
 The `sources` extra bundles `pypdf`, `python-pptx`, and `python-docx`. Without
