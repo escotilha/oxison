@@ -353,14 +353,14 @@ sources = [
 [package.metadata]
 requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=4" },
-    { name = "pypdf", marker = "extra == 'sources'", specifier = ">=4" },
+    { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=6.13.3" },
+    { name = "pypdf", marker = "extra == 'sources'", specifier = ">=6.13.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "python-docx", marker = "extra == 'docx'", specifier = ">=1.1" },
-    { name = "python-docx", marker = "extra == 'sources'", specifier = ">=1.1" },
-    { name = "python-pptx", marker = "extra == 'pptx'", specifier = ">=0.6" },
-    { name = "python-pptx", marker = "extra == 'sources'", specifier = ">=0.6" },
+    { name = "python-docx", marker = "extra == 'docx'", specifier = ">=1.2" },
+    { name = "python-docx", marker = "extra == 'sources'", specifier = ">=1.2" },
+    { name = "python-pptx", marker = "extra == 'pptx'", specifier = ">=1.0.2" },
+    { name = "python-pptx", marker = "extra == 'sources'", specifier = ">=1.0.2" },
     { name = "rich", marker = "extra == 'pretty'", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
 ]

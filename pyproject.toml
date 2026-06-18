@@ -21,11 +21,11 @@ dependencies = []
 
 [project.optional-dependencies]
 pretty = ["rich>=13"]
-pdf = ["pypdf>=4"]
-pptx = ["python-pptx>=0.6"]
-docx = ["python-docx>=1.1"]
+pdf = ["pypdf>=6.13.3"]
+pptx = ["python-pptx>=1.0.2"]
+docx = ["python-docx>=1.2"]
 dev = ["ruff>=0.6", "mypy>=1.10", "pytest>=8", "pytest-asyncio>=0.23"]
-sources = ["pypdf>=4", "python-pptx>=0.6", "python-docx>=1.1"]
+sources = ["pypdf>=6.13.3", "python-pptx>=1.0.2", "python-docx>=1.2"]
 # Note: the roadmap branch works on any roadmap via claude -p. If a
 # private `oxi_core` roadmap-parser package happens to be importable,
 # oxison opportunistically uses it for extra structure — but it is NOT a
