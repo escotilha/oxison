@@ -21,7 +21,19 @@ RUN apt-get update \
 
 # The Claude Code CLI (the worker binary) + the sandbox runtime (srt), which
 # narrows the worker's network egress to the domain allowlist from inside.
-RUN npm install -g @anthropic-ai/claude-code @anthropic-ai/sandbox-runtime \
+#
+# Versions are PINNED (SECURITY-AUDIT.md F1): the worker binary is the single
+# execution surface for untrusted repo content, and a floating `npm install -g`
+# would silently pull whatever is latest at build time — including a regression
+# or a freshly-disclosed CVE. Bump these deliberately on a verified-safe release
+# and record the bump in CHANGELOG.md. Check the current versions with:
+#   npm view @anthropic-ai/claude-code version
+#   npm view @anthropic-ai/sandbox-runtime version
+ARG CLAUDE_CODE_VERSION=2.1.181
+ARG SANDBOX_RUNTIME_VERSION=0.0.55
+RUN npm install -g \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+        "@anthropic-ai/sandbox-runtime@${SANDBOX_RUNTIME_VERSION}" \
     && claude --version
 
 # Run as an unprivileged user with a real HOME (claude writes session state).
