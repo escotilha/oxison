@@ -1,14 +1,54 @@
 from pathlib import Path
 
-from oxison.sources.base import SourceUnit
+from oxison.sources.base import SourceResult, SourceUnit
 from oxison.sources.ingest import (
     LOW_RELEVANCE_ANNOTATE,
+    MAX_SOURCE_FILE_BYTES,
     IngestOutput,
+    _safe_extract,
     domain_terms_from_repomap,
     ingest_paths,
     render_extra_context,
     source_relevance,
 )
+
+
+class _CountingAdapter:
+    """A fake adapter that records whether extract() was reached."""
+    name = "fake"
+
+    def __init__(self):
+        self.extract_called = False
+
+    def extract(self, path):
+        self.extract_called = True
+        return SourceResult.ok(self.name, str(path), units=[])
+
+
+def test_safe_extract_skips_oversized_file_before_parsing(tmp_path: Path, monkeypatch):
+    # SECURITY-AUDIT.md F7: a file over the size cap is skipped BEFORE the parser
+    # runs, so a malicious huge document can't DoS the in-process parser.
+    big = tmp_path / "huge.pdf"
+    big.write_bytes(b"%PDF-1.4\n")  # tiny on disk; we fake the reported size
+    monkeypatch.setattr(
+        "oxison.sources.ingest.Path.stat",
+        lambda self: type("S", (), {"st_size": MAX_SOURCE_FILE_BYTES + 1})(),
+    )
+    adapter = _CountingAdapter()
+    res = _safe_extract(adapter, big)
+    assert res.status == "skipped"
+    assert "too large" in (res.reason or "")
+    assert adapter.extract_called is False  # parser never touched the file
+
+
+def test_safe_extract_allows_normal_file(tmp_path: Path):
+    # Regression guard: a normal-sized file still reaches the parser.
+    f = tmp_path / "notes.pdf"
+    f.write_bytes(b"%PDF-1.4\nsmall\n")
+    adapter = _CountingAdapter()
+    res = _safe_extract(adapter, f)
+    assert res.status == "ok"
+    assert adapter.extract_called is True
 
 
 def test_ingest_dispatches_by_type_and_collects_ledger(tmp_path: Path):
