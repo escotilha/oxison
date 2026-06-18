@@ -146,23 +146,35 @@ async def current_branch(repo: Path) -> str | None:
 
 
 async def ensure_integration_branch(
-    repo: Path, *, integration_branch: str = INTEGRATION_BRANCH
+    repo: Path, *, base_branch: str, integration_branch: str = INTEGRATION_BRANCH
 ) -> tuple[bool, str]:
     """Check out ``integration_branch`` so the loop composes onto it instead of the
-    live branch — creating it from the current HEAD if absent, or reusing it (to
-    keep accumulating) if a prior run already made it. The working tree must be
-    clean (``cmd_build`` enforces this before calling). Returns ``(ok, message)``;
-    on success ``message`` is the branch name, on failure the git error."""
+    live branch. If it doesn't exist, create it from the current HEAD. If it already
+    exists (a prior run), reuse it ONLY when ``base_branch`` is fully contained in it
+    (an ancestor); otherwise it predates commits on the live branch — reusing it
+    would build on a stale base and turn the final merge into a 3-way — so refuse
+    with guidance instead. The working tree must be clean (``cmd_build`` enforces
+    this). Returns ``(ok, message)``; on success ``message`` is the branch name, on
+    failure a human-readable reason."""
     rc, _ = await git_cmd(
         ["rev-parse", "--verify", "--quiet", f"refs/heads/{integration_branch}"], cwd=repo
     )
-    if rc == 0:
-        rc, msg = await git_cmd(["checkout", integration_branch], cwd=repo)
-    else:
-        rc, msg = await git_cmd(["checkout", "-b", integration_branch], cwd=repo)
     if rc != 0:
-        return (False, msg.strip()[:200])
-    return (True, integration_branch)
+        rc, msg = await git_cmd(["checkout", "-b", integration_branch], cwd=repo)
+        return (rc == 0, integration_branch if rc == 0 else msg.strip()[:200])
+    # Exists: reuse only if it already contains the live branch (no stale base).
+    rc_anc, _ = await git_cmd(
+        ["merge-base", "--is-ancestor", base_branch, integration_branch], cwd=repo
+    )
+    if rc_anc != 0:
+        return (
+            False,
+            f"{integration_branch!r} is stale / has diverged from {base_branch!r} "
+            f"(it predates commits on {base_branch!r}); merge it into {base_branch!r} "
+            f"or delete it (git branch -D {integration_branch}), then re-run",
+        )
+    rc, msg = await git_cmd(["checkout", integration_branch], cwd=repo)
+    return (rc == 0, integration_branch if rc == 0 else msg.strip()[:200])
 
 
 __all__ = [

@@ -192,16 +192,35 @@ async def test_ensure_integration_branch_creates_then_reuses(tmp_path):
     _init_repo(repo)
     main_head = _head(repo)
 
-    ok, name = await ensure_integration_branch(repo)
+    ok, name = await ensure_integration_branch(repo, base_branch="main")
     assert ok and name == INTEGRATION_BRANCH
     assert await current_branch(repo) == INTEGRATION_BRANCH
     assert _head(repo) == main_head             # created at the live branch's tip
 
     # Reuse path: back on main, ensure_integration_branch checks the existing one out.
     _git(["checkout", "main"], repo)
-    ok2, name2 = await ensure_integration_branch(repo)
+    ok2, name2 = await ensure_integration_branch(repo, base_branch="main")
     assert ok2 and name2 == INTEGRATION_BRANCH
     assert await current_branch(repo) == INTEGRATION_BRANCH
+
+
+@pytest.mark.asyncio
+async def test_ensure_integration_branch_refuses_when_stale(tmp_path):
+    """A leftover integration branch that predates new commits on the live branch is
+    refused, not silently reused on a stale base (would build on outdated code)."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)                            # on "main"
+    assert (await ensure_integration_branch(repo, base_branch="main"))[0]
+    _git(["checkout", "main"], repo)
+    # main advances past where the integration branch sits.
+    (repo / "newer.py").write_text("n = 1\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-qm", "advance main"], repo)
+
+    ok, msg = await ensure_integration_branch(repo, base_branch="main")
+    assert not ok
+    assert "stale" in msg and INTEGRATION_BRANCH in msg
+    assert await current_branch(repo) == "main"   # never switched onto the stale branch
 
 
 @pytest.mark.asyncio
@@ -212,7 +231,7 @@ async def test_redirect_composes_on_integration_branch_main_untouched(tmp_path):
     _init_repo(repo)                            # on "main"
     main_before = _head(repo)
 
-    assert (await ensure_integration_branch(repo))[0]
+    assert (await ensure_integration_branch(repo, base_branch="main"))[0]
     assert await current_branch(repo) == INTEGRATION_BRANCH
 
     # Task A — worker branches from HEAD (= integration branch), commits, integrates.

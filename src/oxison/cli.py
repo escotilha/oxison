@@ -840,18 +840,26 @@ def cmd_build(args: argparse.Namespace) -> int:
                   "parallel integration is not yet supported.")
         args.max_workers = 1
         # Redirect off a protected branch onto a dedicated one (never advance main
-        # in place). On a non-protected branch, integrate onto it as before.
-        live = asyncio.run(current_branch(repo))
-        if live in DEFAULT_PROTECTED_BRANCHES:
-            ok, msg = asyncio.run(
-                ensure_integration_branch(repo, integration_branch=INTEGRATION_BRANCH)
-            )
-            if not ok:
-                print(f"oxison: could not switch to integration branch "
-                      f"{INTEGRATION_BRANCH!r}: {msg}")
-                return 3
-            integration_target = INTEGRATION_BRANCH
-            restore_branch = live
+        # in place). Skipped on --dry-run (no side effects). Detached HEAD fails
+        # early rather than once-per-task. On a non-protected branch, integrate
+        # onto it as before.
+        if not args.dry_run:
+            live = asyncio.run(current_branch(repo))
+            if live is None:
+                print("oxison: --integrate needs a checked-out branch (the repo is in "
+                      "detached HEAD). Check out a branch, then re-run.")
+                return 2
+            if live in DEFAULT_PROTECTED_BRANCHES:
+                ok, msg = asyncio.run(
+                    ensure_integration_branch(
+                        repo, base_branch=live, integration_branch=INTEGRATION_BRANCH
+                    )
+                )
+                if not ok:
+                    print(f"oxison: {msg}")
+                    return 3
+                integration_target = INTEGRATION_BRANCH
+                restore_branch = live
         integrator = make_integrator(repo, protected_branches=DEFAULT_PROTECTED_BRANCHES)
 
     store = TaskStore.open(repo)
