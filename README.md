@@ -6,6 +6,8 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
+**🇬🇧 English** · [🇧🇷 Português (Brasil)](README.pt-BR.md)
+
 **Point it at a repo — or start from just an idea — and it writes the product docs (PRODUCT/MANUAL/STACK), plans a roadmap, and builds the work. Runs on Claude, Kimi, or Grok. Read-only by default, sandboxed when it writes.**
 
 > 🎉 **v0.6.0 is out** — cross-run build memory, safe `--integrate` (composes onto a dedicated branch, never touches your `main`), and a full external security-audit pass. See the [release notes](https://github.com/escotilha/oxison/releases/tag/v0.6.0).
@@ -354,7 +356,7 @@ Install straight from this repo — no PyPI needed:
 # zero-install, always-latest (recommended)
 uvx --from git+https://github.com/escotilha/oxison oxison run /path/to/repo
 # pin to a release
-pip install "git+https://github.com/escotilha/oxison.git@v0.5.0"
+pip install "git+https://github.com/escotilha/oxison.git@v0.6.0"
 ```
 
 Or from a local clone:
