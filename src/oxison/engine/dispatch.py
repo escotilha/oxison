@@ -42,6 +42,7 @@ from .sandbox import (
     srt_wrap,
     write_srt_settings,
 )
+from .skillscope import build_curated_config_dir
 
 # DispatchOutcome moved to engine/types.py (L3); re-exported so existing
 # `from .dispatch import DispatchOutcome` call sites keep working unchanged.
@@ -306,14 +307,38 @@ async def launch_worker(
         task_title, rationale=rationale, acceptance=acceptance,
         files_hint=files_hint, repo_name=repo.name, memory_block=memory_block,
     )
+    # Worker skills (Layer-1 + token auth only): grant the Skill tool against a
+    # curated, per-task CLAUDE_CONFIG_DIR so the worker can invoke a generic skill
+    # subset WITHOUT seeing the operator's full (possibly project-specific)
+    # library. Token auth (api_key/provider) is required so the curated dir needs
+    # no credential mirroring; under host OAuth the feature is off (the operator
+    # is warned at cmd_build). See skillscope.build_curated_config_dir.
+    token_auth = api_key is not None or bool(engine_config.provider_env)
+    skills_on = engine_config.worker_skills and token_auth
+    skill_config_dir: Path | None = None
+    if skills_on:
+        skill_config_dir = worktree_root.parent / "skill-config" / task_identifier
+        build_curated_config_dir(
+            skill_config_dir,
+            source_skills_dir=Path.home() / ".claude" / "skills",
+            skill_names=engine_config.worker_skill_names,
+        )
+
     argv = build_argv(
-        prompt, tool_set=ToolSet.FULL_WRITE, auth_mode=auth_mode, model=model,
+        prompt,
+        tool_set=ToolSet.FULL_WRITE_WITH_SKILLS if skills_on else ToolSet.FULL_WRITE,
+        auth_mode=auth_mode, model=model,
         max_budget_usd=engine_config.worker_max_budget_usd,
         # claude requires a UUID session id — the task identifier (oxpz-...) is
         # NOT a valid UUID and makes the worker exit 1 before doing any work.
         session_id=generate_session_id(),
     )
-    env = build_env(api_key=api_key, extra=dict(engine_config.provider_env))
+    worker_extra_env = dict(engine_config.provider_env)
+    if skill_config_dir is not None:
+        # Point the worker at the curated config dir so it resolves ONLY the
+        # curated skills. CLAUDE_* is in the env whitelist, so this propagates.
+        worker_extra_env["CLAUDE_CONFIG_DIR"] = str(skill_config_dir)
+    env = build_env(api_key=api_key, extra=worker_extra_env)
 
     # Layer-1 sandbox: wrap the worker in srt so its writes are confined to the
     # worktree (+ scoped .git + ~/.claude) and its egress to the allowlist. The
@@ -334,11 +359,16 @@ async def launch_worker(
         scratch = worktree_root.parent / "tmp" / task_identifier
         scratch.mkdir(parents=True, exist_ok=True)
         env = {**env, "TMPDIR": str(scratch), "TMP": str(scratch), "TEMP": str(scratch)}
+        # The curated CLAUDE_CONFIG_DIR (when worker-skills is on) must be
+        # writable: claude writes its own .claude.json / state there.
+        extra_write_paths = engine_config.sandbox_extra_write_paths
+        if skill_config_dir is not None:
+            extra_write_paths = (*extra_write_paths, str(skill_config_dir))
         settings = build_srt_settings(
             worktree=worktree, repo=repo, task_identifier=task_identifier,
             home=Path.home(),
             allowed_domains=engine_config.sandbox_allowed_domains or DEFAULT_SANDBOX_DOMAINS,
-            extra_write_paths=engine_config.sandbox_extra_write_paths,
+            extra_write_paths=extra_write_paths,
             tmpdir=str(scratch),
         )
         settings_path = log_path.parent / f"{task_identifier}.srt.json"
