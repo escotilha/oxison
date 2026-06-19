@@ -1,11 +1,14 @@
 # oxison
 
+[![Release](https://img.shields.io/github/v/release/escotilha/oxison?label=release)](https://github.com/escotilha/oxison/releases/latest)
 [![CI](https://github.com/escotilha/oxison/actions/workflows/ci.yml/badge.svg)](https://github.com/escotilha/oxison/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/escotilha/oxison)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 **Point it at a repo — or start from just an idea — and it writes the product docs (PRODUCT/MANUAL/STACK), plans a roadmap, and builds the work. Runs on Claude, Kimi, or Grok. Read-only by default, sandboxed when it writes.**
+
+> 🎉 **v0.6.0 is out** — cross-run build memory, safe `--integrate` (composes onto a dedicated branch, never touches your `main`), and a full external security-audit pass. See the [release notes](https://github.com/escotilha/oxison/releases/tag/v0.6.0).
 
 `oxison` reads a repository, understands it by driving the
 [Claude Code](https://claude.com/claude-code) CLI as a **read-only**
