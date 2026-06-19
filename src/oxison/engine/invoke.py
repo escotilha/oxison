@@ -61,18 +61,28 @@ from oxison.dispatch import (
 # is granted it via ``FULL_WRITE``.
 _WRITE_TOOLS: tuple[str, ...] = ("Bash", "Edit", "Write", "MultiEdit")
 
+# Skill invocation. Granted ONLY to a build worker explicitly running with
+# curated worker-skills (see ``engine/skillscope.py``) — it is layered on
+# ``FULL_WRITE`` and NEVER on ``READ_ONLY`` (a read-only comprehension/plan
+# worker that could invoke a skill would no longer be structurally read-only).
+_SKILL_TOOLS: tuple[str, ...] = ("Skill",)
+
 
 class ToolSet(Enum):
     """The only constructor of a tool set for an engine ``claude -p`` call.
 
     ``READ_ONLY`` mirrors Phase-1's ``READ_ONLY_TOOLS`` exactly (parity test
     in Phase 0 guarantees the Phase-7 migration is a no-op swap).
-    ``FULL_WRITE`` is the *only* path to write-capable tools in engine code
-    (C2 chokepoint).
+    ``FULL_WRITE`` and ``FULL_WRITE_WITH_SKILLS`` are the *only* write-capable
+    tool sets in engine code (C2 chokepoint — grep both). The latter adds the
+    ``Skill`` tool and is selected by ``launch_worker`` only when worker-skills
+    is enabled AND auth is token-based (see ``skillscope``); it is a superset of
+    ``FULL_WRITE``, so it carries the same write capability plus skill invocation.
     """
 
     READ_ONLY = tuple(READ_ONLY_TOOLS)
     FULL_WRITE = tuple(READ_ONLY_TOOLS) + _WRITE_TOOLS
+    FULL_WRITE_WITH_SKILLS = tuple(READ_ONLY_TOOLS) + _WRITE_TOOLS + _SKILL_TOOLS
 
     @property
     def tools(self) -> tuple[str, ...]:

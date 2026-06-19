@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+- **Build workers can invoke a curated generic skill subset (`--worker-skills`).**
+  Opt-in, **Layer-1 (srt) + token auth only**. The worker is pointed at a scoped,
+  per-task `CLAUDE_CONFIG_DIR` that exposes ONLY a curated set (`cto`,
+  `review-changes`, `verify`, `test-and-fix`, `first-principles`) — never the
+  operator's full skill library — and is granted the `Skill` tool via a new
+  `ToolSet.FULL_WRITE_WITH_SKILLS` (`READ_ONLY` is untouched; a read-only
+  comprehension/plan worker can never invoke a skill). Gated to token auth
+  (`--api-key`/`--provider`) so the curated dir needs no credential mirroring; off
+  under host OAuth and ignored in container mode (both warned). v1 ships **inline
+  skills only** — no `Task`/`Workflow` tools, so skills can't fan out (e.g. `/cto`
+  runs sequential); fan-out skills like `cto-swarm` are a deliberate follow-up.
+
 ## [0.6.0] — 2026-06-18
 
 Folds in cross-run build memory, safe roadmap integration onto a dedicated branch,

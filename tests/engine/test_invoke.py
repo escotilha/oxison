@@ -38,9 +38,23 @@ def test_full_write_is_superset_with_write_tools() -> None:
     assert not ({"Bash", "Edit", "Write", "MultiEdit"} & ro)
 
 
-def test_only_two_tool_sets_exist() -> None:
-    # The enum is the single constructor; there is no third/ad-hoc write set.
-    assert {m.name for m in ToolSet} == {"READ_ONLY", "FULL_WRITE"}
+def test_tool_sets_are_exactly_the_three_known() -> None:
+    # The enum is the single constructor; no ad-hoc set sneaks in. The skill set
+    # is a deliberate third member (build worker + worker-skills).
+    assert {m.name for m in ToolSet} == {
+        "READ_ONLY", "FULL_WRITE", "FULL_WRITE_WITH_SKILLS"
+    }
+
+
+def test_full_write_with_skills_adds_only_skill_on_top_of_full_write() -> None:
+    fw = set(ToolSet.FULL_WRITE.tools)
+    fws = set(ToolSet.FULL_WRITE_WITH_SKILLS.tools)
+    # Superset of FULL_WRITE, and the ONLY addition is the Skill tool.
+    assert fw < fws
+    assert fws - fw == {"Skill"}
+    # The Skill tool is NEVER in the read-only set — a read-only worker must not
+    # be able to invoke a skill (would break the structural read-only invariant).
+    assert "Skill" not in set(ToolSet.READ_ONLY.tools)
 
 
 def test_build_argv_reuses_phase1_and_threads_toolset() -> None:

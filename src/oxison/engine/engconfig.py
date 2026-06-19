@@ -137,6 +137,21 @@ class EngineConfig:
     srt_binary: str | None = None
     """srt executable. ``None`` = discover on PATH at preflight; set to pin."""
 
+    # --- worker skills (Layer-1 srt + token auth only) ---
+    worker_skills: bool = False
+    """Let the build worker invoke a *curated* generic skill subset via the
+    ``Skill`` tool. Gated at dispatch to TOKEN auth (``--api-key``/``--provider``)
+    so the curated config dir needs no credential mirroring; under host OAuth the
+    feature is off. Layer-1 (srt) only — container workers don't see host skills.
+    Default off."""
+    worker_skill_names: tuple[str, ...] = (
+        "first-principles", "review-changes", "verify", "test-and-fix", "cto",
+    )
+    """The curated generic subset a worker may invoke. The worker sees ONLY these
+    (via a dedicated CLAUDE_CONFIG_DIR), never the operator's full skill library —
+    so project-specific skills are never exposed. A name absent from the host is
+    silently skipped."""
+
     # --- loop guardrails (the three net-new aborts) ---
     no_progress_ticks: int = 5
     """LP2: halt after N consecutive ticks with no task advancing."""

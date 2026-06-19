@@ -298,6 +298,11 @@ def build_parser() -> argparse.ArgumentParser:
                          help="merge each graded branch into the repo's current branch "
                               "as it passes — composes the roadmap into ONE product on "
                               "main (forces --max-workers 1). Default: per-branch, no merge.")
+    build_p.add_argument("--worker-skills", action="store_true",
+                         help="let build workers invoke a curated generic skill subset "
+                              "(cto, review-changes, verify, test-and-fix, first-principles) "
+                              "via a scoped CLAUDE_CONFIG_DIR. Layer-1 (srt) + token auth only "
+                              "(--api-key/--provider); off under host OAuth.")
     build_p.add_argument("--bare", action="store_true",
                          help="use --bare auth (ANTHROPIC_API_KEY) instead of your login")
     build_p.add_argument("--api-key", default=None, help=_API_KEY_HELP)
@@ -914,7 +919,19 @@ def cmd_build(args: argparse.Namespace) -> int:
         sandbox_layer=args.sandbox_layer,
         provider_env=cfg.provider_env,
         sandbox_allowed_domains=sandbox_domains,
+        worker_skills=args.worker_skills,
     )
+    # Worker-skills is enforced at dispatch (token auth + Layer-1 only); surface
+    # the gates here so an operator who asked for it isn't silently ignored.
+    if args.worker_skills:
+        token_auth = bool(cfg.api_key) or bool(cfg.provider_env)
+        if not token_auth:
+            print("oxison: --worker-skills needs token auth (--api-key or --provider); "
+                  "it is OFF under host OAuth login.", file=sys.stderr)
+        elif engine_config.sandbox_layer == "container":
+            print("oxison: --worker-skills is Layer-1 (srt) only — a container worker "
+                  "can't see host skills, so it is ignored under --sandbox-layer container.",
+                  file=sys.stderr)
     # Preflight the sandbox: fail BEFORE the loop (not one tick in) if a
     # prerequisite is missing. If disabled, warn loudly on stderr — never silent.
     if not engine_config.sandbox_enabled:
