@@ -13,6 +13,21 @@
   `VERDICT: FAIL`. Its review cost is charged against the run budget. Wired as a
   new optional `critic` hook on the build loop — `grade_diff` stays the pure
   deterministic gate.
+- **Regression guard: auto-detect the test command + container-layer support.**
+  Two follow-ups to the `--test-cmd` guard. (1) **`--test-cmd auto`** infers the
+  project's test command from its manifests (Makefile `test:` target, then
+  `package.json` `scripts.test`, pyproject/pytest, `Cargo.toml`, `go.mod`) so the
+  guard runs without naming it; omitting `--test-cmd` still leaves the guard OFF
+  (the inert-by-default contract is unchanged). (2) The guard now works under
+  **`--sandbox-layer container`** (previously warned + disabled): in container
+  mode the worker's workspace is a self-contained clone on the host, so the test
+  runs host-side under the *same* srt confinement as srt mode — the worker's
+  stronger container isolation is about the code-writing worker; the regression
+  test always runs host-side under srt. In container mode srt isn't a worker
+  prerequisite, so if the host lacks srt the guard warns and stays inactive rather
+  than silently no-op'ing. (An opt-in integration test now exercises the guard
+  under the real srt binary, including a write-outside-the-worktree confinement
+  check.)
 - **Greenfield → build: `oxison build --scaffold`.** Greenfield (`oxison ideate`)
   was plan-only — it stopped at a `roadmap.json`. Now
   `oxison build <roadmap> --repo <new-dir> --scaffold` git-inits a fresh repo (with

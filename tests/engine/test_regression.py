@@ -1,9 +1,10 @@
 """Tests for the regression guard (engine/regression.py).
 
-All tests run with ``sandbox_enabled=False`` so they exercise the orchestration
+Most tests run with ``sandbox_enabled=False`` so they exercise the orchestration
 (baseline once, per-task gating, green→red rule, cleanup) with trivial shell
-commands and never depend on the srt binary being installed in CI. The srt
-wrapping itself is covered by the sandbox unit tests + an opt-in integration spike.
+commands and never depend on the srt binary being installed in CI. The opt-in
+``sandbox_enabled=True`` integration tests at the bottom run the command under the
+REAL srt binary and are skipped when it isn't installed.
 """
 
 from __future__ import annotations
@@ -15,9 +16,12 @@ import pytest
 
 from oxison.engine.engconfig import EngineConfig
 from oxison.engine.regression import RegressionVerifier, run_tests_sandboxed
+from oxison.engine.sandbox import resolve_srt_binary
 from oxison.engine.types import DispatchOutcome
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+
+_SRT = resolve_srt_binary()
 
 
 def _git(args, cwd):
@@ -215,3 +219,80 @@ async def test_verifier_baseline_runs_once(tmp_path, monkeypatch):
 
     assert calls["baseline"] == 1
     await v.cleanup()
+
+
+# --- container workspace model: check() works against a self-contained clone ---
+
+@pytest.mark.asyncio
+async def test_verifier_works_against_self_contained_clone(tmp_path):
+    # In --sandbox-layer container, the worker's workspace is a `git clone`
+    # (self-contained .git), NOT a linked worktree, and outcome.worktree_path is
+    # that clone on the host. Prove check() is workspace-model-agnostic: baseline
+    # (main repo HEAD) green, clone with a BROKEN marker → red → rejected.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "--no-hardlinks", "-q", str(repo), str(clone)],
+        check=True, capture_output=True,
+    )
+    _git(["config", "user.email", "t@t"], clone)
+    _git(["config", "user.name", "t"], clone)
+    (clone / "BROKEN").write_text("x")
+    _git(["add", "-A"], clone)
+    _git(["commit", "-qm", "break the suite in the clone"], clone)
+
+    v = RegressionVerifier(
+        repo=repo, engine_config=_bare_cfg("test ! -f BROKEN"), work_dir=tmp_path / "reg"
+    )
+    outcome = DispatchOutcome(
+        ok=True, branch="feat/oxison-c", worktree_path=str(clone), changed_files=["BROKEN"]
+    )
+    verdict = await v.check(outcome)
+    assert not verdict.ok
+    assert verdict.failure_class == "regression"
+    await v.cleanup()
+
+
+# --- opt-in integration: the REAL srt binary actually runs + confines the test ---
+
+@pytest.mark.skipif(_SRT is None, reason="srt binary not installed")
+@pytest.mark.asyncio
+async def test_real_srt_runs_command_and_reports_exit(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    cfg = EngineConfig(sandbox_enabled=True)  # real srt wrapping
+
+    ok = await run_tests_sandboxed(
+        worktree=repo, repo=repo, test_command="exit 0", engine_config=cfg, srt_binary=_SRT,
+        settings_path=tmp_path / "s1.json", scratch_dir=tmp_path / "scratch1",
+        log_path=tmp_path / "l1.log", timeout_s=60,
+    )
+    assert ok is True
+
+    bad = await run_tests_sandboxed(
+        worktree=repo, repo=repo, test_command="exit 3", engine_config=cfg, srt_binary=_SRT,
+        settings_path=tmp_path / "s2.json", scratch_dir=tmp_path / "scratch2",
+        log_path=tmp_path / "l2.log", timeout_s=60,
+    )
+    assert bad is False
+
+
+@pytest.mark.skipif(_SRT is None, reason="srt binary not installed")
+@pytest.mark.asyncio
+async def test_real_srt_blocks_write_outside_worktree(tmp_path):
+    # Confinement proof: a test command that writes OUTSIDE the worktree (+ scratch)
+    # is denied by srt → the command fails (red) and the file is never created.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    escape = tmp_path / "escape_marker"  # not under worktree / scratch / ~/.claude
+    cfg = EngineConfig(sandbox_enabled=True)
+
+    ok = await run_tests_sandboxed(
+        worktree=repo, repo=repo, test_command=f"echo pwned > {escape}",
+        engine_config=cfg, srt_binary=_SRT,
+        settings_path=tmp_path / "s.json", scratch_dir=tmp_path / "scratch",
+        log_path=tmp_path / "l.log", timeout_s=60,
+    )
+    assert ok is False
+    assert not escape.exists()

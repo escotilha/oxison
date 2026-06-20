@@ -298,10 +298,12 @@ def build_parser() -> argparse.ArgumentParser:
     build_p.add_argument(
         "--test-cmd", default=None,
         help="REGRESSION GUARD (opt-in): the project's own test command (e.g. "
-             "'pytest -q' or 'npm test'). When set, the engine runs it under the "
-             "same build sandbox on a baseline worktree and on each graded change, "
-             "rejecting a change that turns a passing suite red. Off by default. "
-             "Not supported with --sandbox-layer container.")
+             "'pytest -q' or 'npm test'). The engine runs it under the same build "
+             "sandbox on a baseline worktree and on each graded change, rejecting a "
+             "change that turns a passing suite red. Pass 'auto' to auto-detect it "
+             "from the project's manifests (Makefile test:, package.json, "
+             "pyproject/pytest, Cargo, go.mod). Omit to leave the guard OFF. Works "
+             "in all sandbox layers (the test runs host-side under srt).")
     build_p.add_argument("--no-sandbox", action="store_true",
                          help="DANGER: run build workers WITHOUT the sandbox "
                               "(only on repos you fully trust)")
@@ -992,15 +994,25 @@ def cmd_build(args: argparse.Namespace) -> int:
         from .engine.sandbox import DEFAULT_SANDBOX_DOMAINS
         sandbox_domains = DEFAULT_SANDBOX_DOMAINS + prov.sandbox_domains
 
-    # Regression guard (opt-in via --test-cmd). The container layer has a
-    # different workspace model (a clone, not the worktree), so the guard's
-    # srt-on-worktree mechanism doesn't apply there — warn + disable rather than
-    # silently mislead. In --no-sandbox mode the guard runs the command bare.
+    # Regression guard. An explicit --test-cmd wins; otherwise auto-detect the
+    # project's own test command from its manifests so the guard works out of the
+    # box. The test runs host-side under the SAME srt sandbox as the worker (bare
+    # under --no-sandbox) in EVERY sandbox layer — including container mode, where
+    # outcome.worktree_path is the worker's clone on the host, so the same
+    # host-side run applies (the worker's stronger container isolation is about
+    # the code-writing worker; the test always runs host-side under srt).
+    # Absent → guard OFF (inert by default, unchanged). `--test-cmd auto` detects
+    # the project's command from its manifests; an explicit string overrides.
     test_cmd = args.test_cmd
-    if test_cmd and not args.no_sandbox and args.sandbox_layer == "container":
-        print("oxison: --test-cmd (regression guard) is not supported with "
-              "--sandbox-layer container; it is ignored for this run.", file=sys.stderr)
-        test_cmd = None
+    test_cmd_auto = False
+    if test_cmd == "auto":
+        from .engine.testdiscover import discover_test_command
+        test_cmd_auto = True
+        test_cmd = discover_test_command(repo)
+        if test_cmd is None:
+            print("oxison: --test-cmd auto: could not detect a test command from the "
+                  "project's manifests; regression guard is OFF for this run.",
+                  file=sys.stderr)
 
     engine_config = EngineConfig(
         worker_max_budget_usd=args.worker_budget_usd,
@@ -1066,6 +1078,14 @@ def cmd_build(args: argparse.Namespace) -> int:
     # engine/regression.py. Cleaned up in the teardown finally below.
     regression_verifier = None
     if engine_config.pre_push_test_command:
+        # The guard's test runs host-side under srt. srt mode already hard-failed
+        # preflight above if srt is missing; container mode does NOT require srt for
+        # the worker, so warn here (don't fail — the guard is an opt-in extra) that
+        # without host srt the guard will be inactive (baseline runs red → skipped).
+        if engine_config.sandbox_enabled and resolve_srt_binary(engine_config.srt_binary) is None:
+            print("oxison: WARNING — regression guard needs the srt runtime on the host, "
+                  "which is not installed; the guard will be INACTIVE this run "
+                  "(install: npm i -g @anthropic-ai/sandbox-runtime).", file=sys.stderr)
         from .engine.regression import RegressionVerifier
         regression_verifier = RegressionVerifier(
             repo=repo, engine_config=engine_config,
@@ -1141,7 +1161,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     else:
         print("  memory        : off (--no-memory)")
     if regression_verifier is not None:
-        print(f"  regression    : on (test-cmd: {engine_config.pre_push_test_command!r})")
+        src = "auto-detected" if test_cmd_auto else "--test-cmd"
+        print(f"  regression    : on ({src}: {engine_config.pre_push_test_command!r})")
     if integrator is not None:
         if integration_target is not None:
             print(f"  integrate     : ON — composing onto {integration_target!r}; "

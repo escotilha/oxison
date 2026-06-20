@@ -81,12 +81,14 @@ project's tests. It is contained by three layers:
    `oxison-build/worktrees/`, so the repo's main working tree is never edited.
 3. **A grader** — rejects any diff that touches a protected path
    (`.github/workflows`, `.env`, lockfiles, `.git/`, `oxison-build/`) or, with
-   the optional **regression guard** (`--test-cmd "pytest -q"`), one that turns a
-   green test suite red. The test command runs under the *same* srt sandbox as
-   the worker — once on a baseline worktree, then on each change — so a passing
-   suite that a change breaks is caught without ever running untrusted project
-   test code with engine privileges. Only a green→red transition is gated (a
-   suite already red at baseline leaves the guard inactive). Off by default.
+   the optional **regression guard** (`--test-cmd "pytest -q"`, or `--test-cmd auto`
+   to detect it from the project's manifests), one that turns a green test suite
+   red. The test command runs under the *same* srt sandbox as the worker — once on
+   a baseline worktree, then on each change, host-side in every sandbox layer
+   (including `container`) — so a passing suite that a change breaks is caught
+   without ever running untrusted project test code with engine privileges. Only a
+   green→red transition is gated (a suite already red at baseline leaves the guard
+   inactive). Off by default.
 
 With the srt sandbox on, build mode is safe to point at repos you don't fully
 trust.
