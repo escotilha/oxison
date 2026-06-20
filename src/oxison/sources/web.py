@@ -17,10 +17,15 @@ SSRF hardening (the URL is user-provided but redirects are attacker-influenced):
   an unresolvable host is blocked. Applied on the initial host and re-validated
   on each redirect via a custom opener — `urllib` would otherwise follow a
   redirect to an internal address with no second scheme/host check.
+- The **actual connected peer IP** is re-checked *post-connect* (closes the
+  DNS-rebinding TOCTOU: the check-time and connect-time DNS lookups are
+  independent, so a rebinding attacker could pass the host check, then connect to
+  a private/metadata IP). Enforced by a guarded HTTP/HTTPS connection in the opener.
 - Response size + extracted text are capped; a wall-clock timeout bounds the GET.
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import socket
 import urllib.request
@@ -40,6 +45,25 @@ class BlockedURLError(ValueError):
     """A URL (or a redirect target) is disallowed by the SSRF guard."""
 
 
+def _ip_is_blocked(ip_str: str) -> bool:
+    """True if a literal IP is non-public (private/loopback/link-local/reserved/
+    multicast/unspecified). An IPv4-mapped IPv6 (``::ffff:127.0.0.1``) classifies
+    as global on CPython's ``ipaddress`` but routes to the embedded IPv4, so it's
+    re-evaluated as that IPv4 or the mapped form bypasses the guard (CAND-2). A
+    value that can't be parsed as an IP is blocked (fail-closed)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return bool(
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+    )
+
+
 def _host_is_blocked(hostname: str | None) -> bool:
     """True if ``hostname`` resolves to a non-public address (or can't resolve).
 
@@ -52,20 +76,7 @@ def _host_is_blocked(hostname: str | None) -> bool:
         infos = socket.getaddrinfo(hostname, None)
     except OSError:
         return True
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        # An IPv4-mapped IPv6 address (``::ffff:127.0.0.1``) classifies as global
-        # on CPython's ipaddress but routes to the embedded IPv4 — re-evaluate it
-        # as that IPv4, or the mapped form bypasses the guard (CAND-2).
-        mapped = getattr(ip, "ipv4_mapped", None)
-        if mapped is not None:
-            ip = mapped
-        if (
-            ip.is_private or ip.is_loopback or ip.is_link_local
-            or ip.is_reserved or ip.is_multicast or ip.is_unspecified
-        ):
-            return True
-    return False
+    return any(_ip_is_blocked(str(info[4][0])) for info in infos)
 
 
 def _require_allowed(url: str) -> None:
@@ -87,9 +98,59 @@ class _ValidatingRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-#: Opener that validates redirect targets. Replaces the default (which follows
-#: redirects blind). S310/B310 are about scheme auditing — done in `_require_allowed`.
-_opener = urllib.request.build_opener(_ValidatingRedirect)
+def _abort_if_private_peer(sock: socket.socket) -> None:
+    """Post-connect SSRF check — closes the DNS-rebinding TOCTOU. ``_require_allowed``
+    validates the IP a hostname resolved to at *check* time, but the connection does
+    its own independent DNS lookup, so an attacker controlling DNS can show a public
+    IP to the check and a private/metadata IP to the connection. Re-check the ACTUAL
+    peer the socket connected to and abort if it's non-public."""
+    try:
+        peer = sock.getpeername()[0]
+    except OSError:
+        return
+    if _ip_is_blocked(peer):
+        sock.close()
+        raise BlockedURLError(f"connection resolved to a blocked address: {peer}")
+
+
+class _GuardedHTTPConnection(http.client.HTTPConnection):
+    def connect(self) -> None:
+        super().connect()
+        if self.sock is not None:
+            _abort_if_private_peer(self.sock)
+
+
+class _GuardedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self) -> None:
+        super().connect()
+        if self.sock is not None:
+            _abort_if_private_peer(self.sock)
+
+
+class _GuardedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(_GuardedHTTPConnection, req)
+
+
+class _GuardedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        # ``_context`` / ``_check_hostname`` exist at runtime (set by
+        # HTTPSHandler.__init__) but aren't declared in typeshed — mirror the
+        # stdlib ``https_open`` so TLS verification is unchanged.
+        return self.do_open(
+            _GuardedHTTPSConnection, req,
+            context=self._context,  # type: ignore[attr-defined]
+            check_hostname=self._check_hostname,  # type: ignore[attr-defined]
+        )
+
+
+#: Opener that validates redirect targets AND re-checks the connected peer IP
+#: (post-connect, the DNS-rebinding TOCTOU fix). Replaces the defaults (which
+#: follow redirects blind and trust the connect-time DNS). S310/B310 are about
+#: scheme auditing — done in `_require_allowed`.
+_opener = urllib.request.build_opener(
+    _ValidatingRedirect, _GuardedHTTPHandler, _GuardedHTTPSHandler
+)
 
 
 class _TextExtractor(HTMLParser):
