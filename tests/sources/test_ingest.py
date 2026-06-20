@@ -1,10 +1,14 @@
+import time
 from pathlib import Path
+
+import pytest
 
 from oxison.sources.base import SourceResult, SourceUnit
 from oxison.sources.ingest import (
     LOW_RELEVANCE_ANNOTATE,
     MAX_SOURCE_FILE_BYTES,
     IngestOutput,
+    _extract_with_timeout,
     _safe_extract,
     domain_terms_from_repomap,
     ingest_paths,
@@ -49,6 +53,42 @@ def test_safe_extract_allows_normal_file(tmp_path: Path):
     res = _safe_extract(adapter, f)
     assert res.status == "ok"
     assert adapter.extract_called is True
+
+
+class _SlowAdapter:
+    """A fake adapter whose extract() runs longer than the timeout — stands in for
+    a small-but-pathological file (quadratic alloc, xref loop)."""
+    name = "slow"
+
+    def __init__(self, seconds: float):
+        self.seconds = seconds
+
+    def extract(self, path):
+        time.sleep(self.seconds)
+        return SourceResult.ok(self.name, str(path), units=[])
+
+
+def test_safe_extract_times_out_pathological_parse(tmp_path: Path, monkeypatch):
+    # SECURITY-AUDIT.md F7 (parse-timeout half): a small file whose parse exceeds
+    # the wall-clock cap is skipped, not allowed to hang ingest in-process.
+    monkeypatch.setattr("oxison.sources.ingest.EXTRACT_TIMEOUT_S", 0.1)
+    f = tmp_path / "slow.pdf"
+    f.write_bytes(b"%PDF-1.4\n")  # tiny on disk — the size cap won't catch it
+    res = _safe_extract(_SlowAdapter(seconds=5.0), f)
+    assert res.status == "skipped"
+    assert "timed out" in (res.reason or "")
+
+
+def test_extract_with_timeout_returns_result_when_fast(tmp_path: Path):
+    # Under the cap, the real result is returned unchanged (no thread-relay loss).
+    f = tmp_path / "ok.pdf"
+    res = _extract_with_timeout(_SlowAdapter(seconds=0.0), f, timeout_s=5.0)
+    assert res.status == "ok"
+
+
+def test_extract_with_timeout_raises_timeout_when_slow(tmp_path: Path):
+    with pytest.raises(TimeoutError):
+        _extract_with_timeout(_SlowAdapter(seconds=5.0), tmp_path / "x.pdf", timeout_s=0.1)
 
 
 def test_ingest_dispatches_by_type_and_collects_ledger(tmp_path: Path):

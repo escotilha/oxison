@@ -18,6 +18,7 @@ twin of the plan-boundary relevance filter (:func:`oxison.oxipensa_gate.filter_b
 from __future__ import annotations
 
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -87,9 +88,17 @@ def _static_adapters() -> list[SourceAdapter]:
 #: process and have a history of size-correlated DoS (zip bombs, quadratic alloc,
 #: xref loops). A generous 64 MiB ceiling is far above any real doc a user feeds
 #: in while bounding a malicious one before the parser touches it. This is a
-#: pre-emptive guard, not a parse limit — a small-but-pathological file still
-#: relies on the catch-all net below (a parse timeout is a deferred follow-up).
+#: pre-emptive guard on *size*; the *parse-time* guard is ``EXTRACT_TIMEOUT_S``
+#: below, for a small-but-pathological file the size cap can't catch.
 MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024
+
+#: Wall-clock cap on a single ``adapter.extract`` (SECURITY-AUDIT.md F7, parse-
+#: timeout half). The size cap above stops a *large* file; this stops a *small*
+#: one that's expensive to parse (quadratic alloc, xref/decompression loops) and
+#: would otherwise hang ingest in-process. 30 s is far beyond any real document.
+#: On timeout the file is skipped (the daemon worker thread is abandoned — bounded
+#: by the file being small post-size-cap, and it dies with the process).
+EXTRACT_TIMEOUT_S = 30.0
 
 
 def _safe_extract(adapter: SourceAdapter, path: Path) -> SourceResult:
@@ -113,12 +122,47 @@ def _safe_extract(adapter: SourceAdapter, path: Path) -> SourceResult:
             reason=f"file too large: {size} bytes > {MAX_SOURCE_FILE_BYTES} cap",
         )
     try:
-        return adapter.extract(path)
+        return _extract_with_timeout(adapter, path, EXTRACT_TIMEOUT_S)
+    except TimeoutError:
+        return SourceResult.skip(
+            getattr(adapter, "name", "unknown"), str(path),
+            reason=f"extraction timed out (> {EXTRACT_TIMEOUT_S:g}s) — "
+            "skipped to bound a pathological parse",
+        )
     except Exception as exc:  # noqa: BLE001 — deliberate catch-all net at the orchestrator boundary
         return SourceResult.skip(
             getattr(adapter, "name", "unknown"), str(path),
             reason=f"extraction failed: {type(exc).__name__}: {exc}",
         )
+
+
+def _extract_with_timeout(
+    adapter: SourceAdapter, path: Path, timeout_s: float
+) -> SourceResult:
+    """Run ``adapter.extract`` with a wall-clock cap (F7 parse-timeout).
+
+    The parsers are synchronous and not cancellable, so the extract runs in a
+    daemon thread we ``join`` with a timeout. On timeout we raise ``TimeoutError``
+    and abandon the thread — it's a daemon (won't block process exit) and bounded
+    by the file being small (the size cap ran first). An exception inside the
+    thread is re-raised on the caller side so the existing catch-all net handles it.
+    """
+    box: dict[str, object] = {}
+
+    def _run() -> None:
+        try:
+            box["result"] = adapter.extract(path)
+        except BaseException as exc:  # noqa: BLE001 — relayed to the caller verbatim
+            box["error"] = exc
+
+    t = threading.Thread(target=_run, name=f"oxison-extract-{path.name}", daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        raise TimeoutError(f"extract exceeded {timeout_s:g}s")
+    if "error" in box:
+        raise box["error"]  # type: ignore[misc]
+    return box["result"]  # type: ignore[return-value]
 
 
 def ingest_paths(
