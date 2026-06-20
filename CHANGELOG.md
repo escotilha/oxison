@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Security
+- **DNS-rebinding TOCTOU closed in the web/URL adapter (#36).** The SSRF guard
+  validated the IP a host resolved to at *check* time, but `urllib`'s connection
+  did its own independent DNS lookup — a rebinding attacker could show a public IP
+  to the check and connect to a private/metadata one. The opener now re-checks the
+  **actual connected peer IP** post-connect (guarded HTTP/HTTPS connections) and
+  aborts on a non-public peer. Also adds the previously-missing regression test for
+  the redirect SSRF validator (`_ValidatingRedirect`).
 - **Document parsers now have a parse-time cap (SECURITY-AUDIT F7, parse-timeout
   half).** A small-but-pathological source file (tiny on disk, but expensive to
   parse — quadratic allocation, xref/decompression loops) is skipped after

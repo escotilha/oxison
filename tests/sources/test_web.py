@@ -126,3 +126,56 @@ def test_extract_blocks_metadata_url_without_network():
     res = WebAdapter().extract("http://169.254.169.254/latest/meta-data/")
     assert res.status == "skipped"
     assert "blocked" in (res.reason or "")
+
+
+def test_ip_is_blocked_classifies_literals():
+    from oxison.sources.web import _ip_is_blocked
+    assert _ip_is_blocked("169.254.169.254")        # cloud metadata
+    assert _ip_is_blocked("127.0.0.1")              # loopback
+    assert _ip_is_blocked("10.0.0.1")               # RFC-1918
+    assert _ip_is_blocked("::1")                     # IPv6 loopback
+    assert _ip_is_blocked("::ffff:127.0.0.1")       # IPv4-mapped loopback (CAND-2)
+    assert _ip_is_blocked("not-an-ip")              # fail-closed on unparseable
+    assert not _ip_is_blocked("8.8.8.8")            # public
+    assert not _ip_is_blocked("93.184.216.34")
+
+
+def test_abort_if_private_peer_blocks_rebound_connection():
+    # The DNS-rebinding TOCTOU defence: even if the host check passed, a connection
+    # that actually landed on a private/metadata IP is aborted + the socket closed.
+    from oxison.sources.web import BlockedURLError, _abort_if_private_peer
+
+    class _FakeSock:
+        def __init__(self, ip: str) -> None:
+            self.ip = ip
+            self.closed = False
+
+        def getpeername(self) -> tuple[str, int]:
+            return (self.ip, 443)
+
+        def close(self) -> None:
+            self.closed = True
+
+    rebound = _FakeSock("169.254.169.254")
+    with pytest.raises(BlockedURLError):
+        _abort_if_private_peer(rebound)  # type: ignore[arg-type]
+    assert rebound.closed is True        # socket torn down, not left open
+
+    public = _FakeSock("93.184.216.34")
+    _abort_if_private_peer(public)       # type: ignore[arg-type]
+    assert public.closed is False        # a real public peer passes untouched
+
+
+def test_validating_redirect_blocks_internal_target():
+    # SSRF regression (the C1 mechanism had no test): urllib would follow a 3xx to
+    # an internal address with no second check; _ValidatingRedirect re-validates the
+    # redirect target and refuses. (The blocked path raises before super(), so the
+    # req/fp/etc. are never touched.)
+    from oxison.sources.web import BlockedURLError, _ValidatingRedirect
+    h = _ValidatingRedirect()
+    for newurl in ("http://169.254.169.254/latest/meta-data/",
+                   "http://127.0.0.1/admin",
+                   "http://10.0.0.1/internal",
+                   "ftp://example.com/x"):
+        with pytest.raises(BlockedURLError):
+            h.redirect_request(None, None, 302, "Found", {}, newurl)  # type: ignore[arg-type]
