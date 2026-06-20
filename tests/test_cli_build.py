@@ -358,3 +358,49 @@ def test_build_integrate_dry_run_has_no_side_effect(tmp_path, capsys):
     assert rc == 0
     assert _branch(repo) == "main"                       # still on main
     assert not _branch_exists(repo, "oxison/integration")  # no branch created
+
+
+def test_scaffold_repo_inits_fresh_repo(tmp_path: Path) -> None:
+    # Greenfield: --scaffold git-inits a fresh repo with an initial commit so the
+    # build loop has a HEAD to branch workers from.
+    from oxison.cli import _scaffold_repo
+    target = tmp_path / "newproj"
+    assert _scaffold_repo(target) == 0
+    assert (target / ".git").is_dir()
+    head = subprocess.run(["git", "-C", str(target), "rev-parse", "HEAD"],
+                          capture_output=True, text=True)
+    assert head.returncode == 0 and head.stdout.strip()  # an initial commit exists
+
+
+def test_scaffold_repo_refuses_nonempty_nongit_dir(tmp_path: Path, capsys) -> None:
+    # Safety: never scaffold over an existing non-git directory's files.
+    from oxison.cli import _scaffold_repo
+    target = tmp_path / "existing"
+    target.mkdir()
+    (target / "keep.txt").write_text("don't clobber me")
+    assert _scaffold_repo(target) == 2
+    assert not (target / ".git").exists()
+    assert "non-empty" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+def test_build_scaffold_inits_then_runs(tmp_path: Path, monkeypatch, capsys) -> None:
+    # `oxison build --scaffold` on a not-yet-existing --repo: git-inits it, then
+    # proceeds into the (faked) build loop — the greenfield plan->build path.
+    rm = _write_roadmap(tmp_path)
+    target = tmp_path / "fresh"  # does not exist yet
+    monkeypatch.setattr(
+        cli, "preflight", lambda cfg: types.SimpleNamespace(claude_version="test")
+    )
+    import oxison.engine.sandbox as sb
+    monkeypatch.setattr(sb, "resolve_srt_binary", lambda configured=None: "/fake/srt")
+    _patch_loop(monkeypatch)
+    args = cli.build_parser().parse_args(
+        ["build", str(rm), "--repo", str(target), "--scaffold"]
+    )
+    rc = args.func(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert (target / ".git").is_dir()              # scaffolded
+    assert "scaffolded a fresh git repo" in out
+    assert "build loop halted" in out              # proceeded into the loop

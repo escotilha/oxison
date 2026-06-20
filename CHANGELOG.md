@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- **Greenfield → build: `oxison build --scaffold`.** Greenfield (`oxison ideate`)
+  was plan-only — it stopped at a `roadmap.json`. Now
+  `oxison build <roadmap> --repo <new-dir> --scaffold` git-inits a fresh repo (with
+  an initial commit so the loop has a base) and runs the build loop to implement a
+  from-scratch roadmap into it — the README's "documented next step". Refuses a
+  non-empty non-git dir (won't scaffold over existing files). `oxison ideate` now
+  prints the exact `build --scaffold` follow-up command on success, closing the
+  plan → build loop.
+
 ### Security
 - **DNS-rebinding TOCTOU closed in the web/URL adapter (#36).** The SSRF guard
   validated the IP a host resolved to at *check* time, but `urllib`'s connection
