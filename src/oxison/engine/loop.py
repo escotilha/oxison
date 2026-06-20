@@ -41,6 +41,12 @@ Dispatcher = Callable[[Task, str], Awaitable[DispatchOutcome]]
 #: regression check runs the project's tests). The loop awaits the result iff it
 #: is awaitable, so both shapes — and existing sync test graders — work unchanged.
 Grader = Callable[[DispatchOutcome], GradeVerdict | Awaitable[GradeVerdict]]
+#: Optional AI quality gate, run ONLY after the (deterministic) grader passes, so
+#: a mechanically-rejected diff never pays for a review. Task-aware (it judges the
+#: diff against the task's acceptance criteria) and always async (a ``claude -p``
+#: review). Returns a ``GradeVerdict``; ``ok=False`` rejects the task with
+#: ``failure_class="critic"``. ``cost_usd`` is charged against the run budget.
+Critic = Callable[[Task, DispatchOutcome], Awaitable[GradeVerdict]]
 #: Injected outcome sink (cross-run memory capture). Called once per GRADED task
 #: with ``(task, outcome, verdict, merged)``; never on adapter/worker failure
 #: (no verdict). The loop stays memory-agnostic — it imports nothing from
@@ -125,6 +131,7 @@ async def run_build_loop(
     now_epoch_fn: NowEpochFn,
     integrator: Integrator | None = None,
     recorder: Recorder | None = None,
+    critic: Critic | None = None,
 ) -> LoopSummary:
     """Drive the build loop to a halt. Returns a summary of what happened.
 
@@ -214,6 +221,24 @@ async def run_build_loop(
                                   reason=verdict.reason, failure_class=verdict.failure_class)
                 record(merged=False)
                 return _TaskRun(charged=charged, failed=True, progressed=True)
+            # AI critic (opt-in): a task-aware quality gate run ONLY after the
+            # deterministic grader passes (so a mechanically-rejected diff never
+            # pays for a review). Charges its review cost; an ok=False verdict
+            # rejects the task as "critic". Skipped when no critic is wired.
+            if critic is not None:
+                critic_verdict = await critic(task, outcome)
+                charged += critic_verdict.cost_usd
+                if not critic_verdict.ok:
+                    store.mark_failed(task.identifier, now=now_fn(),
+                                      reason=critic_verdict.reason,
+                                      failure_class=critic_verdict.failure_class)
+                    # Record the critic's rejection (not the passed grade) so memory
+                    # learns what the critic caught. Direct call mirrors record()'s
+                    # fail-soft contract without reassigning the grader's `verdict`.
+                    if recorder is not None:
+                        with contextlib.suppress(Exception):
+                            recorder(task, outcome, critic_verdict, False)
+                    return _TaskRun(charged=charged, failed=True, progressed=True)
             if integrator is None:
                 # Default: DB-only merge boundary (per-branch, no git advance).
                 store.mark_merged(task.identifier, now=now_fn())
@@ -340,6 +365,7 @@ __all__ = [
     "HALT_COMPLETE",
     "HALT_MAX_TICKS",
     "HALT_NO_PROGRESS",
+    "Critic",
     "Dispatcher",
     "Grader",
     "Integrator",

@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### Added
+- **AI critic — `oxison build --critic`.** An opt-in quality gate: after the
+  deterministic `grade_diff` passes, a read-only `claude -p` reviews each worker's
+  diff against the task's acceptance criteria and can reject it (`failure_class
+  "critic"`) — the "AI critique" the grader module flagged as future work. Runs
+  ONLY after the mechanical grader passes (a rejected diff never pays for a
+  review); read-only, so no sandbox needed; **fails open** on an infra error or
+  unparseable verdict (defers to the grader's pass), vetoing only on an explicit
+  `VERDICT: FAIL`. Its review cost is charged against the run budget. Wired as a
+  new optional `critic` hook on the build loop — `grade_diff` stays the pure
+  deterministic gate.
 - **Greenfield → build: `oxison build --scaffold`.** Greenfield (`oxison ideate`)
   was plan-only — it stopped at a `roadmap.json`. Now
   `oxison build <roadmap> --repo <new-dir> --scaffold` git-inits a fresh repo (with
