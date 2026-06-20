@@ -317,6 +317,36 @@ def test_build_integrate_redirects_to_branch_and_restores(tmp_path, monkeypatch,
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+def test_build_integrate_respects_custom_protected_branches(tmp_path, monkeypatch, capsys):
+    """--protected-branches makes a non-default branch protected too: on `develop`
+    with --protected-branches main,develop, --integrate redirects off it instead of
+    advancing it in place."""
+    repo = _real_git_repo(tmp_path)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-q", "-b", "develop"], check=True)
+    develop_head = _head(repo)
+    rm = _write_roadmap(tmp_path)
+    monkeypatch.setattr(
+        cli, "preflight", lambda cfg: types.SimpleNamespace(claude_version="test")
+    )
+    import oxison.engine.sandbox as sb
+    monkeypatch.setattr(sb, "resolve_srt_binary", lambda configured=None: "/fake/srt")
+
+    async def fake_loop(store, **kwargs):
+        return LoopSummary(ticks=1, dispatched=1, merged=1, failed=0,
+                           spent_usd=1.0, halt_reason="complete", integrated=1)
+    monkeypatch.setattr(engine_loop, "run_build_loop", fake_loop)
+
+    args = cli.build_parser().parse_args(
+        ["build", str(rm), "--repo", str(repo), "--integrate",
+         "--protected-branches", "main,develop"]
+    )
+    assert args.func(args) == 0
+    assert _branch(repo) == "develop"                    # restored to develop
+    assert _branch_exists(repo, "oxison/integration")    # redirected off develop
+    assert _head(repo) == develop_head                   # develop NEVER advanced
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
 def test_build_integrate_dry_run_has_no_side_effect(tmp_path, capsys):
     """--integrate --dry-run must not check out / create the integration branch."""
     repo = _real_git_repo(tmp_path)

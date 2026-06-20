@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- **`--integrate` protected branches are now configurable (`--protected-branches`, #69).**
+  Defaults to `main,master`; pass e.g. `--protected-branches main,develop,trunk` for a
+  repo whose protected default isn't `main`/`master` — `--integrate` then redirects off
+  those too instead of advancing them in place. Also: the end-of-run report no longer
+  contradicts itself if the branch-restore fails (it stops printing "merge into
+  `<branch>`" while you're actually left on the integration branch).
+
 ### Added
 - **Build workers can invoke a curated generic skill subset (`--worker-skills`).**
   Opt-in, **Layer-1 (srt) + token auth only**. The worker is pointed at a scoped,
