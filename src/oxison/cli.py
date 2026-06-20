@@ -298,6 +298,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="merge each graded branch into the repo's current branch "
                               "as it passes — composes the roadmap into ONE product on "
                               "main (forces --max-workers 1). Default: per-branch, no merge.")
+    build_p.add_argument("--protected-branches", default="main,master",
+                         help="comma-separated branches --integrate must never advance "
+                              "in place (it redirects onto an integration branch instead). "
+                              "Default: main,master. Set e.g. 'main,develop,trunk'.")
     build_p.add_argument("--worker-skills", action="store_true",
                          help="let build workers invoke a curated generic skill subset "
                               "(cto, review-changes, verify, test-and-fix, first-principles) "
@@ -818,15 +822,21 @@ def cmd_build(args: argparse.Namespace) -> int:
     integrator = None
     integration_target: str | None = None      # branch we compose onto, if redirected
     restore_branch: str | None = None          # branch to switch back to at the end
+    restore_failed = False                      # set if the end-of-run restore fails
     if args.integrate:
         import subprocess
 
         from .engine.integrate import (
-            DEFAULT_PROTECTED_BRANCHES,
             INTEGRATION_BRANCH,
             current_branch,
             ensure_integration_branch,
             make_integrator,
+        )
+
+        # Branches --integrate must never advance in place (configurable; the
+        # backstop in integrate_branch is armed with the same set).
+        protected_branches = frozenset(
+            b.strip() for b in args.protected_branches.split(",") if b.strip()
         )
 
         dirty = subprocess.run(
@@ -854,7 +864,7 @@ def cmd_build(args: argparse.Namespace) -> int:
                 print("oxison: --integrate needs a checked-out branch (the repo is in "
                       "detached HEAD). Check out a branch, then re-run.")
                 return 2
-            if live in DEFAULT_PROTECTED_BRANCHES:
+            if live in protected_branches:
                 ok, msg = asyncio.run(
                     ensure_integration_branch(
                         repo, base_branch=live, integration_branch=INTEGRATION_BRANCH
@@ -865,7 +875,7 @@ def cmd_build(args: argparse.Namespace) -> int:
                     return 3
                 integration_target = INTEGRATION_BRANCH
                 restore_branch = live
-        integrator = make_integrator(repo, protected_branches=DEFAULT_PROTECTED_BRANCHES)
+        integrator = make_integrator(repo, protected_branches=protected_branches)
 
     store = TaskStore.open(repo)
     ingest = ingest_roadmap(store, roadmap)
@@ -1058,6 +1068,7 @@ def cmd_build(args: argparse.Namespace) -> int:
                 capture_output=True, text=True, check=False,
             )
             if rc.returncode != 0:
+                restore_failed = True
                 print(f"  note: could not restore branch {restore_branch!r} (you are on "
                       f"{integration_target!r}): {rc.stderr.strip()[:160]}", file=sys.stderr)
 
@@ -1067,10 +1078,15 @@ def cmd_build(args: argparse.Namespace) -> int:
           f"integrated={summary.integrated} spent=${summary.spent_usd:.4f}")
     print(f"  taskstore: {store.status_counts()}")
     if integrator is not None and summary.integrated:
-        if integration_target is not None:
+        if integration_target is not None and not restore_failed:
             print(f"  ✓ {integration_target!r} holds {summary.integrated} integrated "
                   f"task(s) — review, then merge into {restore_branch!r}:")
             print(f"      git merge {integration_target}")
+        elif integration_target is not None:
+            # Restore failed — the user is on the integration branch, not
+            # restore_branch, so don't tell them to "merge into" it from there.
+            print(f"  ✓ {integration_target!r} holds {summary.integrated} integrated "
+                  f"task(s) (you are on it; the restore to {restore_branch!r} failed above).")
         else:
             print(f"  ✓ the current branch now holds {summary.integrated} integrated task(s)")
     return 0
