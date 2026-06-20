@@ -59,6 +59,24 @@ async def test_completion_when_all_merge(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_async_grader_regression_rejection(tmp_path):
+    # The grader may be async (the regression-guard path). The loop awaits it and
+    # a rejection fails the task — proving the await-tolerant call site works.
+    s = _store_with(tmp_path, 1)
+
+    async def disp(task, branch):
+        return _ok_outcome(branch)
+
+    async def grader(outcome):
+        return GradeVerdict(ok=False, reason="regression: green→red", failure_class="regression")
+
+    summary = await _run(s, options=LoopOptions(max_workers=1), dispatcher=disp, grader=grader)
+    assert summary.failed == 1
+    assert summary.merged == 0
+    assert s.status_counts().get(STATUS_FAILED) == 1
+
+
+@pytest.mark.asyncio
 async def test_LP1_iteration_cap(tmp_path):
     s = _store_with(tmp_path, 10)
 
