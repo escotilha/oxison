@@ -61,11 +61,22 @@ from oxison.dispatch import (
 # is granted it via ``FULL_WRITE``.
 _WRITE_TOOLS: tuple[str, ...] = ("Bash", "Edit", "Write", "MultiEdit")
 
-# Skill invocation. Granted ONLY to a build worker explicitly running with
-# curated worker-skills (see ``engine/skillscope.py``) — it is layered on
-# ``FULL_WRITE`` and NEVER on ``READ_ONLY`` (a read-only comprehension/plan
-# worker that could invoke a skill would no longer be structurally read-only).
-_SKILL_TOOLS: tuple[str, ...] = ("Skill",)
+# Skill invocation + subagent fan-out. Granted ONLY to a build worker explicitly
+# running with curated worker-skills (see ``engine/skillscope.py``) — layered on
+# ``FULL_WRITE`` and NEVER on ``READ_ONLY`` (a read-only comprehension/plan worker
+# that could invoke a skill would no longer be structurally read-only).
+#   - ``Skill`` lets the worker invoke a curated skill.
+#   - ``Agent`` lets a fan-out skill (e.g. ``/cto`` swarm mode) spawn its parallel
+#     specialist subagents. This is containment-safe: srt confines the whole
+#     process tree, so a spawned subagent (a child process at worst) is sandboxed
+#     exactly like the worker, and inherits the curated ``CLAUDE_CONFIG_DIR`` + the
+#     token-auth env (so subagents stay skill-scoped + authenticated). Fan-out is
+#     bounded — ``/cto`` analysts don't nest further, and the worker budget caps
+#     total spend. (``Agent`` is Claude Code's current subagent tool; ``Task`` is
+#     its legacy name. The ``Workflow`` tool is deliberately NOT granted — no
+#     curated skill is a dynamic workflow, and it carries a far larger fan-out
+#     surface.)
+_SKILL_TOOLS: tuple[str, ...] = ("Skill", "Agent")
 
 
 class ToolSet(Enum):
@@ -75,8 +86,9 @@ class ToolSet(Enum):
     in Phase 0 guarantees the Phase-7 migration is a no-op swap).
     ``FULL_WRITE`` and ``FULL_WRITE_WITH_SKILLS`` are the *only* write-capable
     tool sets in engine code (C2 chokepoint — grep both). The latter adds the
-    ``Skill`` tool and is selected by ``launch_worker`` only when worker-skills
-    is enabled AND auth is token-based (see ``skillscope``); it is a superset of
+    ``Skill`` + ``Agent`` tools (skill invocation + subagent fan-out, e.g. ``/cto``
+    swarm) and is selected by ``launch_worker`` only when worker-skills is enabled
+    AND auth is token-based (see ``skillscope``); it is a superset of
     ``FULL_WRITE``, so it carries the same write capability plus skill invocation.
     """
 
