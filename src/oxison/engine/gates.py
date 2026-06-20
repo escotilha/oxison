@@ -7,9 +7,13 @@ the **same** ``engine.protected.is_protected`` matcher against the real diff. A
 diff that touches a protected location fails the grade regardless of what the
 plan said.
 
-This MVP grader is the protected-path fence plus an empty-diff check. The
-fuller grader surface from the build-engine plan (diff-size cap, AI critique,
-anti-cheat, coverage) is deliberately deferred — see the PR description.
+The structural grader (:func:`grade_diff`) is the protected-path fence, the
+empty-diff check, and the diff-size cap — all pure functions of the changed
+file list. :func:`grade_regression` adds the behavioural check (did the change
+break a passing test suite?) as separate pure decision logic; its *evidence* is
+produced out-of-band by :mod:`engine.regression`, which runs the project's test
+command under the same srt sandbox as the worker. The remaining deferred
+surface (AI critique, coverage deltas) is still future work.
 """
 
 from __future__ import annotations
@@ -26,6 +30,11 @@ class GradeVerdict:
     ok: bool
     reason: str
     protected_hits: list[str] = field(default_factory=list)
+    #: Which gate rejected, recorded as the task's ``failure_class`` so the
+    #: store (and the cross-run memory recorder) can tell a protected-path/size
+    #: rejection ("grader") apart from a broke-the-tests rejection ("regression").
+    #: Only meaningful when ``ok`` is False; the loop ignores it on acceptance.
+    failure_class: str = "grader"
 
 
 def grade_diff(
@@ -64,4 +73,29 @@ def grade_diff(
     return GradeVerdict(ok=True, reason="clean")
 
 
-__all__ = ["GradeVerdict", "grade_diff"]
+def grade_regression(*, baseline_green: bool, post_green: bool) -> GradeVerdict:
+    """Decide whether a worker's change is a regression, given test outcomes.
+
+    Pure decision logic — the *evidence* (running the project's test command in
+    the sandbox, before and after) lives in :mod:`engine.regression`; this only
+    encodes the rule. We count **only a green→red transition** as a regression:
+
+    * baseline already red — the suite was broken before this worker touched
+      anything, so a still-red result is not its fault. Accept (and say so), so
+      a repo with pre-existing failures isn't held hostage by the guard.
+    * baseline green, post red — the worker broke a passing suite. Reject under
+      the ``regression`` failure class.
+    * baseline green, post green — no regression. Accept.
+    """
+    if not baseline_green:
+        return GradeVerdict(ok=True, reason="regression check skipped — baseline already red")
+    if not post_green:
+        return GradeVerdict(
+            ok=False,
+            reason="regression: tests passed at baseline but fail after this change",
+            failure_class="regression",
+        )
+    return GradeVerdict(ok=True, reason="no regression")
+
+
+__all__ = ["GradeVerdict", "grade_diff", "grade_regression"]

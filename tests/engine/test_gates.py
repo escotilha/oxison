@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from oxison.engine.engconfig import EngineConfig
-from oxison.engine.gates import grade_diff
+from oxison.engine.gates import grade_diff, grade_regression
 
 PROTECTED = EngineConfig().protected_paths
 
@@ -56,4 +56,32 @@ def test_diff_size_cap():
 def test_diff_under_cap_passes():
     v = grade_diff(["src/x.py"], protected_paths=PROTECTED,
                    diff_size_cap=100, changed_line_count=50)
+    assert v.ok
+
+
+def test_structural_rejection_uses_grader_failure_class():
+    # A protected-path/empty/size rejection is recorded under the default class.
+    v = grade_diff([], protected_paths=PROTECTED)
+    assert not v.ok
+    assert v.failure_class == "grader"
+
+
+# --- grade_regression: only a green→red transition is a regression ---
+
+def test_regression_baseline_red_is_skipped():
+    # Suite was already broken before this worker — not its fault. Accept.
+    v = grade_regression(baseline_green=False, post_green=False)
+    assert v.ok
+    assert "baseline already red" in v.reason
+
+
+def test_regression_green_to_red_rejected():
+    v = grade_regression(baseline_green=True, post_green=False)
+    assert not v.ok
+    assert v.failure_class == "regression"
+    assert "regression" in v.reason
+
+
+def test_regression_green_to_green_passes():
+    v = grade_regression(baseline_green=True, post_green=True)
     assert v.ok

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import getpass
 import importlib
 import os
@@ -287,6 +288,13 @@ def build_parser() -> argparse.ArgumentParser:
                          help="halt after N ticks with no task advancing (LP2 guardrail)")
     build_p.add_argument("--worker-budget-usd", type=float, default=5.0,
                          help="per-worker hard cost cap / timed-out floor (default: 5.0)")
+    build_p.add_argument(
+        "--test-cmd", default=None,
+        help="REGRESSION GUARD (opt-in): the project's own test command (e.g. "
+             "'pytest -q' or 'npm test'). When set, the engine runs it under the "
+             "same build sandbox on a baseline worktree and on each graded change, "
+             "rejecting a change that turns a passing suite red. Off by default. "
+             "Not supported with --sandbox-layer container.")
     build_p.add_argument("--no-sandbox", action="store_true",
                          help="DANGER: run build workers WITHOUT the sandbox "
                               "(only on repos you fully trust)")
@@ -923,6 +931,16 @@ def cmd_build(args: argparse.Namespace) -> int:
         from .engine.sandbox import DEFAULT_SANDBOX_DOMAINS
         sandbox_domains = DEFAULT_SANDBOX_DOMAINS + prov.sandbox_domains
 
+    # Regression guard (opt-in via --test-cmd). The container layer has a
+    # different workspace model (a clone, not the worktree), so the guard's
+    # srt-on-worktree mechanism doesn't apply there — warn + disable rather than
+    # silently mislead. In --no-sandbox mode the guard runs the command bare.
+    test_cmd = args.test_cmd
+    if test_cmd and not args.no_sandbox and args.sandbox_layer == "container":
+        print("oxison: --test-cmd (regression guard) is not supported with "
+              "--sandbox-layer container; it is ignored for this run.", file=sys.stderr)
+        test_cmd = None
+
     engine_config = EngineConfig(
         worker_max_budget_usd=args.worker_budget_usd,
         sandbox_enabled=not args.no_sandbox,
@@ -930,6 +948,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         provider_env=cfg.provider_env,
         sandbox_allowed_domains=sandbox_domains,
         worker_skills=args.worker_skills,
+        pre_push_test_command=test_cmd,
     )
     # Worker-skills is enforced at dispatch (token auth + Layer-1 only); surface
     # the gates here so an operator who asked for it isn't silently ignored.
@@ -981,6 +1000,17 @@ def cmd_build(args: argparse.Namespace) -> int:
     wt_root = repo / "oxison-build" / "worktrees"
     log_root = repo / "oxison-build" / "logs"
 
+    # Regression guard — constructed only when --test-cmd is set. Establishes a
+    # baseline test run once, then gates each graded worktree on green→red. See
+    # engine/regression.py. Cleaned up in the teardown finally below.
+    regression_verifier = None
+    if engine_config.pre_push_test_command:
+        from .engine.regression import RegressionVerifier
+        regression_verifier = RegressionVerifier(
+            repo=repo, engine_config=engine_config,
+            work_dir=repo / "oxison-build" / "regression",
+        )
+
     # Cross-run memory (default on; --no-memory disables). Scope = repo name so
     # priors never cross between projects. Keyword-only (no embedder dependency);
     # abstains below MemoryConfig.abstain_min_score so a weak match injects nothing.
@@ -1003,12 +1033,18 @@ def cmd_build(args: argparse.Namespace) -> int:
             memory_block=memory_block,
         )
 
-    def grader(outcome: DispatchOutcome) -> Any:
-        return grade_diff(
+    async def grader(outcome: DispatchOutcome) -> Any:
+        base = grade_diff(
             outcome.changed_files,
             protected_paths=engine_config.protected_paths,
             diff_size_cap=engine_config.grader_diff_size_cap,
         )
+        # A structural rejection (protected path / oversized / empty) short-circuits:
+        # no point running the suite on a diff we're already rejecting. With no
+        # --test-cmd, this returns exactly the old structural verdict.
+        if not base.ok or regression_verifier is None:
+            return base
+        return await regression_verifier.check(outcome)
 
     def recorder(
         task: Task, outcome: DispatchOutcome, verdict: GradeVerdict, merged: bool
@@ -1043,6 +1079,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"  memory        : on ({len(mem_store.live_in_scope(repo.name))} in scope)")
     else:
         print("  memory        : off (--no-memory)")
+    if regression_verifier is not None:
+        print(f"  regression    : on (test-cmd: {engine_config.pre_push_test_command!r})")
     if integrator is not None:
         if integration_target is not None:
             print(f"  integrate     : ON — composing onto {integration_target!r}; "
@@ -1061,6 +1099,10 @@ def cmd_build(args: argparse.Namespace) -> int:
                            recorder=recorder if mem_store is not None else None)
         )
     finally:
+        if regression_verifier is not None:
+            # Remove the baseline worktree (fail-soft — never mask a loop error).
+            with contextlib.suppress(Exception):
+                asyncio.run(regression_verifier.cleanup())
         if mem_store is not None:
             mem_store.close()
         # Restore the user's original branch; the composed work stays on the

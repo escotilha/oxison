@@ -1,0 +1,174 @@
+"""Tests for the regression guard (engine/regression.py).
+
+All tests run with ``sandbox_enabled=False`` so they exercise the orchestration
+(baseline once, per-task gating, green→red rule, cleanup) with trivial shell
+commands and never depend on the srt binary being installed in CI. The srt
+wrapping itself is covered by the sandbox unit tests + an opt-in integration spike.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+
+import pytest
+
+from oxison.engine.engconfig import EngineConfig
+from oxison.engine.regression import RegressionVerifier, run_tests_sandboxed
+from oxison.engine.types import DispatchOutcome
+
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+
+
+def _git(args, cwd):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _init_repo(repo, *, branch="main"):
+    repo.mkdir()
+    _git(["init", "-q", "-b", branch], repo)
+    _git(["config", "user.email", "t@t"], repo)
+    _git(["config", "user.name", "t"], repo)
+    (repo / "README.md").write_text("base\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-qm", "init"], repo)
+
+
+def _worktree(repo, tmp_path, branch, name):
+    wt = tmp_path / name
+    _git(["worktree", "add", "-b", branch, str(wt), "HEAD"], repo)
+    return wt
+
+
+def _bare_cfg(test_command=None):
+    return EngineConfig(sandbox_enabled=False, pre_push_test_command=test_command)
+
+
+def _outcome(worktree, branch="feat/oxison-a"):
+    return DispatchOutcome(
+        ok=True, branch=branch, worktree_path=str(worktree), changed_files=["a.py"]
+    )
+
+
+# --- run_tests_sandboxed (bare mode) ---
+
+@pytest.mark.asyncio
+async def test_run_tests_passes_on_exit_zero(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ok = await run_tests_sandboxed(
+        worktree=repo, repo=repo, test_command="exit 0", engine_config=_bare_cfg(),
+        srt_binary=None, settings_path=tmp_path / "s.json",
+        scratch_dir=tmp_path / "scratch", log_path=tmp_path / "t.log", timeout_s=30,
+    )
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_run_tests_fails_on_nonzero_exit(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ok = await run_tests_sandboxed(
+        worktree=repo, repo=repo, test_command="exit 1", engine_config=_bare_cfg(),
+        srt_binary=None, settings_path=tmp_path / "s.json",
+        scratch_dir=tmp_path / "scratch", log_path=tmp_path / "t.log", timeout_s=30,
+    )
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_run_tests_timeout_is_red(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    ok = await run_tests_sandboxed(
+        worktree=repo, repo=repo, test_command="sleep 30", engine_config=_bare_cfg(),
+        srt_binary=None, settings_path=tmp_path / "s.json",
+        scratch_dir=tmp_path / "scratch", log_path=tmp_path / "t.log", timeout_s=0.5,
+    )
+    assert ok is False
+
+
+# --- RegressionVerifier (baseline + green→red gating) ---
+
+@pytest.mark.asyncio
+async def test_verifier_rejects_green_to_red(tmp_path):
+    # Suite passes iff a BROKEN marker is absent. Baseline (HEAD) has none → green;
+    # the worker's worktree adds it → red. That green→red transition is the regression.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    v = RegressionVerifier(
+        repo=repo, engine_config=_bare_cfg("test ! -f BROKEN"), work_dir=tmp_path / "reg"
+    )
+    wt = _worktree(repo, tmp_path, "feat/oxison-a", "wt-a")
+    (wt / "BROKEN").write_text("x")
+    _git(["add", "-A"], wt)
+    _git(["commit", "-qm", "break the suite"], wt)
+
+    verdict = await v.check(_outcome(wt))
+    assert not verdict.ok
+    assert verdict.failure_class == "regression"
+    await v.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_verifier_accepts_clean_change(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    v = RegressionVerifier(
+        repo=repo, engine_config=_bare_cfg("test ! -f BROKEN"), work_dir=tmp_path / "reg"
+    )
+    wt = _worktree(repo, tmp_path, "feat/oxison-a", "wt-a")
+    (wt / "ok.py").write_text("x = 1\n")
+    _git(["add", "-A"], wt)
+    _git(["commit", "-qm", "harmless change"], wt)
+
+    verdict = await v.check(_outcome(wt))
+    assert verdict.ok
+    await v.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_verifier_inactive_when_baseline_already_red(tmp_path):
+    # A repo whose suite is red at HEAD must not have the guard fail every task.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    v = RegressionVerifier(
+        repo=repo, engine_config=_bare_cfg("exit 1"), work_dir=tmp_path / "reg"
+    )
+    wt = _worktree(repo, tmp_path, "feat/oxison-a", "wt-a")
+    (wt / "whatever.py").write_text("x = 1\n")
+    _git(["add", "-A"], wt)
+    _git(["commit", "-qm", "change"], wt)
+
+    verdict = await v.check(_outcome(wt))
+    assert verdict.ok  # baseline red → guard inactive, accept
+    await v.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_verifier_baseline_runs_once(tmp_path, monkeypatch):
+    # The baseline suite is established exactly once across many graded tasks.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    v = RegressionVerifier(
+        repo=repo, engine_config=_bare_cfg("test ! -f BROKEN"), work_dir=tmp_path / "reg"
+    )
+    calls = {"baseline": 0}
+    real_run = v._run
+
+    async def counting_run(worktree, *, label):
+        if label == "_baseline":
+            calls["baseline"] += 1
+        return await real_run(worktree, label=label)
+
+    monkeypatch.setattr(v, "_run", counting_run)
+
+    for name in ("wt-a", "wt-b", "wt-c"):
+        wt = _worktree(repo, tmp_path, f"feat/oxison-{name}", name)
+        (wt / f"{name}.py").write_text("x = 1\n")
+        _git(["add", "-A"], wt)
+        _git(["commit", "-qm", name], wt)
+        assert (await v.check(_outcome(wt, branch=f"feat/oxison-{name}"))).ok
+
+    assert calls["baseline"] == 1
+    await v.cleanup()

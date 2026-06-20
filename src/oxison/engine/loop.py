@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -36,7 +37,10 @@ from .integrate import Integrator
 from .taskstore import STATUS_PLANNED, STATUS_PLANNING, Task, TaskStore
 
 Dispatcher = Callable[[Task, str], Awaitable[DispatchOutcome]]
-Grader = Callable[[DispatchOutcome], GradeVerdict]
+#: A grader may be sync (the structural ``grade_diff`` path) or async (when a
+#: regression check runs the project's tests). The loop awaits the result iff it
+#: is awaitable, so both shapes — and existing sync test graders — work unchanged.
+Grader = Callable[[DispatchOutcome], GradeVerdict | Awaitable[GradeVerdict]]
 #: Injected outcome sink (cross-run memory capture). Called once per GRADED task
 #: with ``(task, outcome, verdict, merged)``; never on adapter/worker failure
 #: (no verdict). The loop stays memory-agnostic — it imports nothing from
@@ -194,6 +198,8 @@ async def run_build_loop(
                                   failure_class="worker")
                 return _TaskRun(charged=charged, failed=True, progressed=True)
             verdict = grader(outcome)
+            if inspect.isawaitable(verdict):
+                verdict = await verdict
 
             def record(*, merged: bool) -> None:
                 # Capture this graded outcome into cross-run memory. Fail-soft: a
@@ -205,7 +211,7 @@ async def run_build_loop(
 
             if not verdict.ok:
                 store.mark_failed(task.identifier, now=now_fn(),
-                                  reason=verdict.reason, failure_class="grader")
+                                  reason=verdict.reason, failure_class=verdict.failure_class)
                 record(merged=False)
                 return _TaskRun(charged=charged, failed=True, progressed=True)
             if integrator is None:

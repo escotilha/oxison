@@ -164,10 +164,17 @@ class EngineConfig:
     """LP3: run-level cost ceiling. ``None`` is allowed — distinct from the
     always-set per-worker cap above; LP1/LP2 backstop an unset ceiling."""
 
-    # --- pre-push test gate ---
+    # --- pre-push test gate (regression guard) ---
     pre_push_test_command: str | None = None
-    """Host project's own test command. ``None`` = discover it; never a
-    hardcoded ``ruff``/``pytest`` (that would be project-specific)."""
+    """Host project's own test command. ``None`` = the regression guard is off;
+    never a hardcoded ``ruff``/``pytest`` (that would be project-specific). When
+    set, the engine runs it under the same srt sandbox as the worker — once on a
+    baseline worktree, then on each graded worktree — and rejects a change that
+    turns a passing suite red (see :mod:`engine.regression`)."""
+    regression_timeout_seconds: int = 600
+    """Wall-clock ceiling for a single regression test run. A run that exceeds
+    it is killed (process-group) and treated as red, so a hanging suite can't
+    stall the build loop."""
 
     # internal: extra env vars to whitelist into the worker child env
     extra_env_whitelist: tuple[str, ...] = field(default=())
