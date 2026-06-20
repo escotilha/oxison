@@ -477,3 +477,45 @@ async def test_parallel_overlapping_files_serialize_via_locks(tmp_path):
     summary = await _run(s, options=LoopOptions(max_workers=2), dispatcher=disp)
     assert summary.merged == 2  # both eventually merge (across ticks)
     assert state["peak"] == 1  # the shared-file lock prevented concurrent dispatch
+
+
+@pytest.mark.asyncio
+async def test_critic_rejection_fails_grader_passed_task(tmp_path):
+    # The AI critic runs AFTER the deterministic grader passes; an ok=False critic
+    # verdict rejects the task as "critic" (not merged), and its cost is charged.
+    s = _store_with(tmp_path, 1)
+
+    async def disp(task, branch):
+        return _ok_outcome(branch)
+
+    async def critic(task, outcome):
+        return GradeVerdict(ok=False, reason="critic: acceptance unmet",
+                            failure_class="critic", cost_usd=0.05)
+
+    summary = await run_build_loop(
+        s, options=LoopOptions(max_workers=1), dispatcher=disp, grader=_grader_ok,
+        now_fn=_now, now_epoch_fn=lambda: 0.0, critic=critic,
+    )
+    assert summary.failed == 1
+    assert summary.merged == 0
+    assert s.status_counts().get(STATUS_FAILED) == 1
+    assert summary.spent_usd == pytest.approx(1.05)  # worker 1.0 + critic 0.05
+
+
+@pytest.mark.asyncio
+async def test_critic_pass_lets_task_merge(tmp_path):
+    s = _store_with(tmp_path, 1)
+
+    async def disp(task, branch):
+        return _ok_outcome(branch)
+
+    async def critic(task, outcome):
+        return GradeVerdict(ok=True, reason="critic approved", cost_usd=0.05)
+
+    summary = await run_build_loop(
+        s, options=LoopOptions(max_workers=1), dispatcher=disp, grader=_grader_ok,
+        now_fn=_now, now_epoch_fn=lambda: 0.0, critic=critic,
+    )
+    assert summary.merged == 1
+    assert s.status_counts().get(STATUS_MERGED) == 1
+    assert summary.spent_usd == pytest.approx(1.05)  # critic cost charged on pass too

@@ -322,6 +322,10 @@ def build_parser() -> argparse.ArgumentParser:
                               "(cto, review-changes, verify, test-and-fix, first-principles) "
                               "via a scoped CLAUDE_CONFIG_DIR. Layer-1 (srt) + token auth only "
                               "(--api-key/--provider); off under host OAuth.")
+    build_p.add_argument("--critic", action="store_true",
+                         help="add an AI critic: after the deterministic grader passes, a "
+                              "read-only review judges each diff against the task's acceptance "
+                              "criteria and can reject it. One extra AI call per graded task.")
     build_p.add_argument("--bare", action="store_true",
                          help="use --bare auth (ANTHROPIC_API_KEY) instead of your login")
     build_p.add_argument("--api-key", default=None, help=_API_KEY_HELP)
@@ -1145,6 +1149,13 @@ def cmd_build(args: argparse.Namespace) -> int:
         else:
             print("  integrate     : ON — each graded branch is fast-forwarded onto "
                   "the current branch")
+    # AI critic (opt-in): a read-only review gate after the deterministic grader.
+    critic = None
+    if args.critic:
+        from .engine.critic import make_critic
+        critic = make_critic(cfg)
+        print("  critic        : ON — each graded diff is AI-reviewed against its "
+              "acceptance criteria before acceptance")
     print("\n→ BUILD MODE — workers WRITE code in isolated worktrees under "
           "oxison-build/worktrees/\n")
 
@@ -1153,7 +1164,8 @@ def cmd_build(args: argparse.Namespace) -> int:
             run_build_loop(store, options=options, dispatcher=dispatcher,
                            grader=grader, now_fn=_now_iso, now_epoch_fn=time.time,
                            integrator=integrator,
-                           recorder=recorder if mem_store is not None else None)
+                           recorder=recorder if mem_store is not None else None,
+                           critic=critic)
         )
     finally:
         if regression_verifier is not None:

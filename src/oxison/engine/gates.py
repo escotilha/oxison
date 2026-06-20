@@ -35,6 +35,10 @@ class GradeVerdict:
     #: rejection ("grader") apart from a broke-the-tests rejection ("regression").
     #: Only meaningful when ``ok`` is False; the loop ignores it on acceptance.
     failure_class: str = "grader"
+    #: USD spent producing this verdict. 0.0 for the deterministic ``grade_diff``;
+    #: an AI critic (which makes a ``claude -p`` review call) reports its cost here
+    #: so the loop can charge it against the run budget.
+    cost_usd: float = 0.0
 
 
 def grade_diff(
