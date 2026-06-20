@@ -11,9 +11,16 @@
   `ToolSet.FULL_WRITE_WITH_SKILLS` (`READ_ONLY` is untouched; a read-only
   comprehension/plan worker can never invoke a skill). Gated to token auth
   (`--api-key`/`--provider`) so the curated dir needs no credential mirroring; off
-  under host OAuth and ignored in container mode (both warned). v1 ships **inline
-  skills only** — no `Task`/`Workflow` tools, so skills can't fan out (e.g. `/cto`
-  runs sequential); fan-out skills like `cto-swarm` are a deliberate follow-up.
+  under host OAuth and ignored in container mode (both warned).
+- **Fan-out skills work too — `/cto` swarm mode (#67).** The worker-skills tool
+  set also grants `Agent`, so a curated skill can spawn its parallel specialist
+  subagents (e.g. `/cto`'s security/architecture/performance/quality analysts).
+  Containment-safe: srt confines the whole process tree, so a spawned subagent is
+  sandboxed exactly like the worker and inherits the curated `CLAUDE_CONFIG_DIR` +
+  token-auth env. Bounded — analysts don't nest, and the worker budget caps spend.
+  The `Workflow` tool is deliberately **not** granted (no curated skill is a
+  dynamic workflow; far larger fan-out surface) — that, plus container-mode skills,
+  remain follow-ups.
 
 ## [0.6.0] — 2026-06-18
 

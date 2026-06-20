@@ -46,15 +46,19 @@ def test_tool_sets_are_exactly_the_three_known() -> None:
     }
 
 
-def test_full_write_with_skills_adds_only_skill_on_top_of_full_write() -> None:
+def test_full_write_with_skills_adds_only_skill_and_agent_on_top_of_full_write() -> None:
     fw = set(ToolSet.FULL_WRITE.tools)
     fws = set(ToolSet.FULL_WRITE_WITH_SKILLS.tools)
-    # Superset of FULL_WRITE, and the ONLY addition is the Skill tool.
+    # Superset of FULL_WRITE; the ONLY additions are Skill (invoke a skill) and
+    # Agent (a fan-out skill spawning its parallel subagents, e.g. /cto swarm).
     assert fw < fws
-    assert fws - fw == {"Skill"}
-    # The Skill tool is NEVER in the read-only set — a read-only worker must not
-    # be able to invoke a skill (would break the structural read-only invariant).
-    assert "Skill" not in set(ToolSet.READ_ONLY.tools)
+    assert fws - fw == {"Skill", "Agent"}
+    # NEITHER leaks into the read-only set — a read-only comprehension/plan worker
+    # must not be able to invoke a skill or spawn a subagent (would break the
+    # structural read-only invariant). Workflow is never granted at all.
+    ro = set(ToolSet.READ_ONLY.tools)
+    assert not ({"Skill", "Agent"} & ro)
+    assert "Workflow" not in fws  # no dynamic-workflow surface in a build worker
 
 
 def test_build_argv_reuses_phase1_and_threads_toolset() -> None:
