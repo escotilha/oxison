@@ -128,6 +128,44 @@ async def test_launch_worker_wraps_in_srt_when_enabled(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_launch_worker_removes_scratch_on_exit(tmp_path, monkeypatch):
+    # #36 disk-retention: the per-task scratch/TMPDIR dir is removed on exit (in
+    # the finally), not leaked — cleanup previously only fired on re-dispatch.
+    import asyncio
+
+    from oxison.engine import dispatch as ed
+    from oxison.engine.engconfig import EngineConfig
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    monkeypatch.setattr(ed, "resolve_srt_binary", lambda configured=None: "/fake/srt")
+    wt_root = repo / "oxison-build" / "worktrees"
+    scratch = wt_root.parent / "tmp" / "oxpz-a"
+
+    real_cse = asyncio.create_subprocess_exec
+
+    class _Stop(Exception):
+        pass
+
+    async def spy(*argv, **kw):
+        if argv and (argv[0] == "/fake/srt" or "claude" in str(argv[0])):
+            assert scratch.is_dir()  # created before the worker spawns
+            raise _Stop()
+        return await real_cse(*argv, **kw)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spy)
+    with pytest.raises(_Stop):
+        await ed.launch_worker(
+            repo, task_identifier="oxpz-a", task_title="t", rationale="",
+            acceptance=["x"], files_hint=[], engine_config=EngineConfig(sandbox_enabled=True),
+            auth_mode="oauth", api_key=None, model=None,
+            worktree_root=wt_root,
+            log_path=repo / "oxison-build" / "logs" / "oxpz-a.log",
+        )
+    assert not scratch.exists()  # the finally rmtree'd it — no leak after the run
+
+
+@pytest.mark.asyncio
 async def test_launch_worker_no_srt_when_disabled(tmp_path, monkeypatch):
     import asyncio
 
