@@ -58,16 +58,31 @@ def _npm_test(repo: Path) -> str | None:
     return None
 
 
+def _has_pytest_signal(text: str) -> bool:
+    # "pytest" as a dependency or tool-config mention — but NOT only as the
+    # project's own name (a repo *named* "pytest-foo" isn't necessarily a pytest
+    # project), so skip the ``name = ...`` line before matching.
+    for line in text.splitlines():
+        low = line.strip().lower()
+        if low.startswith("name") and "=" in low:
+            continue
+        if "pytest" in low:
+            return True
+    return False
+
+
 def _pytest(repo: Path) -> str | None:
-    # pytest mentioned in any config/manifest (dep or tool config), or a tests dir
-    # with test_*.py — any one is a strong "this is a pytest project" signal.
+    # A pytest.ini file is a definitive signal regardless of content.
+    if (repo / "pytest.ini").is_file():
+        return "pytest"
     for name in (
-        "pyproject.toml", "setup.cfg", "tox.ini", "pytest.ini",
+        "pyproject.toml", "setup.cfg", "tox.ini",
         "requirements.txt", "requirements-dev.txt",
     ):
         text = _read(repo / name)
-        if text is not None and "pytest" in text.lower():
+        if text is not None and _has_pytest_signal(text):
             return "pytest"
+    # A tests/ (or test/) dir with test_*.py — pytest runs unittest-style too.
     for d in ("tests", "test"):
         td = repo / d
         if td.is_dir() and any(td.glob("test_*.py")):

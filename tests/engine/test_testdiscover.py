@@ -33,6 +33,14 @@ def test_pytest_from_dependency_mention(tmp_path):
     assert discover_test_command(tmp_path) == "pytest"
 
 
+def test_pytest_not_detected_from_project_name_only(tmp_path):
+    # A project NAMED "pytest-*" with no actual pytest dep/config must not match.
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "pytest-clone-detector"\nversion = "0.1"\n'
+    )
+    assert discover_test_command(tmp_path) is None
+
+
 def test_pytest_from_tests_dir(tmp_path):
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_x.py").write_text("def test_x():\n    pass\n")

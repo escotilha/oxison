@@ -296,3 +296,32 @@ async def test_real_srt_blocks_write_outside_worktree(tmp_path):
     )
     assert ok is False
     assert not escape.exists()
+
+
+@pytest.mark.skipif(_SRT is None, reason="srt binary not installed")
+@pytest.mark.asyncio
+async def test_real_srt_clone_cannot_write_main_repo_git(tmp_path):
+    # Container mode hands the verifier a self-contained CLONE. The regression test
+    # (untrusted code) must NOT be able to write into the engine's MAIN repo .git —
+    # that cross-repo write is exactly what the container layer exists to prevent.
+    # This pins the fix that scopes srt to the clone's own .git, not self._repo's;
+    # it fails if run_tests_sandboxed is given repo=main for a self-contained clone.
+    main = tmp_path / "main"
+    _init_repo(main)
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "--no-hardlinks", "-q", str(main), str(clone)],
+        check=True, capture_output=True,
+    )
+    poison = main / ".git" / "oxison_poison"
+    v = RegressionVerifier(
+        repo=main,
+        engine_config=EngineConfig(
+            sandbox_enabled=True, pre_push_test_command=f"echo x > {poison}"
+        ),
+        work_dir=tmp_path / "reg",
+    )
+    ran_ok = await v._run(clone, label="probe")
+    assert ran_ok is False        # the write into main/.git was denied → command failed
+    assert not poison.exists()    # main repo .git untouched
+    await v.cleanup()
