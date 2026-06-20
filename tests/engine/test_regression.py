@@ -146,6 +146,49 @@ async def test_verifier_inactive_when_baseline_already_red(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_verifier_confirms_before_rejecting_flaky(tmp_path, monkeypatch):
+    # baseline green, first post red, confirm green → a flaky/transient red must
+    # NOT fail a legitimate change.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    v = RegressionVerifier(
+        repo=repo, engine_config=_bare_cfg("true"), work_dir=tmp_path / "reg"
+    )
+    wt = _worktree(repo, tmp_path, "feat/oxison-a", "wt-a")
+    seq = iter([True, False, True])  # _run order: baseline, post, confirm
+
+    async def fake_run(worktree, *, label):
+        return next(seq)
+
+    monkeypatch.setattr(v, "_run", fake_run)
+    verdict = await v.check(_outcome(wt))
+    assert verdict.ok
+    await v.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_verifier_rejects_deterministic_regression_after_confirm(tmp_path, monkeypatch):
+    # baseline green, post red, confirm STILL red → a real (deterministic)
+    # regression survives the confirm re-run and is rejected.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    v = RegressionVerifier(
+        repo=repo, engine_config=_bare_cfg("true"), work_dir=tmp_path / "reg"
+    )
+    wt = _worktree(repo, tmp_path, "feat/oxison-a", "wt-a")
+    seq = iter([True, False, False])  # baseline, post, confirm
+
+    async def fake_run(worktree, *, label):
+        return next(seq)
+
+    monkeypatch.setattr(v, "_run", fake_run)
+    verdict = await v.check(_outcome(wt))
+    assert not verdict.ok
+    assert verdict.failure_class == "regression"
+    await v.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_verifier_baseline_runs_once(tmp_path, monkeypatch):
     # The baseline suite is established exactly once across many graded tasks.
     repo = tmp_path / "repo"

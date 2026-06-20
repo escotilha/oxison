@@ -36,7 +36,7 @@ from pathlib import Path
 from .engconfig import EngineConfig
 from .gates import GradeVerdict, grade_regression
 from .gitutil import git_cmd
-from .invoke import kill_process_group
+from .invoke import build_env, kill_process_group
 from .sandbox import (
     DEFAULT_SANDBOX_DOMAINS,
     build_srt_settings,
@@ -45,11 +45,6 @@ from .sandbox import (
     write_srt_settings,
 )
 from .types import DispatchOutcome
-
-#: Oxison's own credentials must never reach the project's (untrusted) test code
-#: via the environment. srt's egress allowlist is the real exfiltration boundary
-#: (test code can't phone home), but stripping these is cheap belt-and-suspenders.
-_ENV_DENY = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 
 def _append_log(log_path: Path, message: str) -> None:
@@ -105,11 +100,16 @@ async def run_tests_sandboxed(
     else:
         argv = inner
 
-    # Inherit the operator's env so the suite's tools resolve (PATH, HOME, LANG,
-    # language-specific flags), minus oxison's own credentials and with TMPDIR
-    # pointed at the sandbox-writable scratch dir.
-    env = {k: v for k, v in os.environ.items() if k not in _ENV_DENY}
-    env.update(TMPDIR=str(scratch_dir), TMP=str(scratch_dir), TEMP=str(scratch_dir))
+    # Build the SAME whitelisted child env the build worker gets (base whitelist ∩
+    # parent env, NO credentials) — never raw os.environ. Untrusted project test
+    # code must not receive ambient secrets (provider keys like XAI_API_KEY,
+    # GITHUB_TOKEN, AWS_*, DB URLs); the srt egress allowlist permits github/pypi/npm
+    # and so is NOT a credential boundary. This is parity with the worker
+    # (engine/dispatch.launch_worker → build_env). TMPDIR → sandbox-writable scratch.
+    env = build_env(
+        api_key=None,
+        extra={"TMPDIR": str(scratch_dir), "TMP": str(scratch_dir), "TEMP": str(scratch_dir)},
+    )
 
     timed_out = False
     proc: asyncio.subprocess.Process | None = None
@@ -236,6 +236,14 @@ class RegressionVerifier:
             self._baseline_green = green
             return green
 
+    @staticmethod
+    def _label(outcome: DispatchOutcome) -> str:
+        # Prefer the task-id worktree dir name; fall back to a filesystem-safe
+        # branch slug so two empty-name outcomes can't share a settings/scratch/log
+        # path — the srt settings file is a confinement input and must never be
+        # clobbered by a concurrent run.
+        return Path(outcome.worktree_path).name or outcome.branch.replace("/", "_") or "task"
+
     async def check(self, outcome: DispatchOutcome) -> GradeVerdict:
         """Grade one worker's worktree against the cached baseline."""
         baseline_green = await self._ensure_baseline()
@@ -243,8 +251,14 @@ class RegressionVerifier:
             # Guard inactive (baseline red or unavailable): accept without
             # spending a per-task run — grade_regression ignores post in this case.
             return grade_regression(baseline_green=False, post_green=False)
-        label = Path(outcome.worktree_path).name or "task"
-        post_green = await self._run(Path(outcome.worktree_path), label=label)
+        worktree = Path(outcome.worktree_path)
+        label = self._label(outcome)
+        post_green = await self._run(worktree, label=label)
+        if not post_green:
+            # Confirm before rejecting. A flaky suite, or a transient slow/timeout
+            # run under worker concurrency, must not fail a legitimate change — and
+            # a real regression is deterministic, so it stays red on the re-run.
+            post_green = await self._run(worktree, label=f"{label}-confirm")
         return grade_regression(baseline_green=True, post_green=post_green)
 
     async def cleanup(self) -> None:

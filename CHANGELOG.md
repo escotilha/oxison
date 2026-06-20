@@ -45,10 +45,13 @@
   whose change turns a **green suite red** (recorded under a distinct `regression`
   failure class). Only a green→red transition counts: a suite already red at
   baseline (or a baseline that can't be established) leaves the guard inactive
-  rather than failing every task. The structural grader still runs first, so a
-  protected-path/oversized/empty diff short-circuits before any test runs. Untrusted
-  project test code never executes with engine privileges (same confinement as the
-  worker; bare only under `--no-sandbox`). Not supported with `--sandbox-layer
+  rather than failing every task, and a green→red is **re-run once to confirm**
+  before rejecting so a flaky or transiently-slow suite doesn't fail a legitimate
+  change. The structural grader still runs first, so a protected-path/oversized/empty
+  diff short-circuits before any test runs. Untrusted project test code never executes
+  with engine privileges: it runs under the same srt confinement **and the same
+  whitelisted env as the build worker** (no provider keys / `GITHUB_TOKEN` / `AWS_*`
+  reach it), bare only under `--no-sandbox`. Not supported with `--sandbox-layer
   container` (warned + ignored). Off by default — no `--test-cmd`, no behaviour change.
 - **Build workers can invoke a curated generic skill subset (`--worker-skills`).**
   Opt-in, **Layer-1 (srt) + token auth only**. The worker is pointed at a scoped,
