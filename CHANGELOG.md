@@ -20,6 +20,16 @@
   path avoids the exposure entirely.)
 
 ### Changed
+- **Per-task ephemeral dirs are cleaned up after a build (#36).** A worker's
+  scratch/TMPDIR — and its curated worker-skills config dir, when used — are removed
+  in the dispatch `finally`; cleanup previously only fired on re-dispatch, so a
+  *successful* run leaked them. The worktree itself is kept (audit trail + the
+  `--integrate` path consumes it after the worker returns).
+- **The grader's diff-size cap is now active (`grader_diff_size_cap`, #36).** The cap
+  (default 1500 changed lines) was implemented in `grade_diff` but never passed from
+  `cmd_build`'s grader — a runaway worker's massive diff is now rejected. (The
+  `OXISON_*` worker-env-contract fields are clarified as reserved + deliberately
+  not injected — the worker is instructed never to read env vars.)
 - **`--integrate` protected branches are now configurable (`--protected-branches`, #69).**
   Defaults to `main,master`; pass e.g. `--protected-branches main,develop,trunk` for a
   repo whose protected default isn't `main`/`master` — `--integrate` then redirects off

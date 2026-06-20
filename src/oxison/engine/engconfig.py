@@ -89,13 +89,16 @@ class EngineConfig:
 
     # --- grader ---
     grader_diff_size_cap: int = 1500
-    """Reject a diff larger than this many lines (grader rule). NOTE: not yet
-    auto-threaded into the grader — kept for when the grader is wired to it."""
+    """Reject a graded diff larger than this many changed lines — a scope fence so
+    a runaway worker can't land a massive diff. Threaded into the grader via
+    cmd_build's grader closure (#36)."""
 
     # --- branch / worker env contract ---
     branch_prefix: str = "feat/oxison-"
-    # The OXISON_* worker-env-contract names below are the *planned* contract for
-    # passing task context into the worker; not yet injected into the worker env.
+    # RESERVED, deliberately NOT injected (#36): the worker prompt instructs the
+    # worker to never read env vars (credential safety), so injecting these would
+    # be inert and contradictory. They name a future task-context-via-env contract
+    # for if that constraint is ever reconciled — kept so the names stay stable.
     env_task_id: str = "OXISON_TASK_ID"
     env_branch: str = "OXISON_BRANCH"
     env_worktree: str = "OXISON_WORKTREE"

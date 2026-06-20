@@ -1004,7 +1004,11 @@ def cmd_build(args: argparse.Namespace) -> int:
         )
 
     def grader(outcome: DispatchOutcome) -> Any:
-        return grade_diff(outcome.changed_files, protected_paths=engine_config.protected_paths)
+        return grade_diff(
+            outcome.changed_files,
+            protected_paths=engine_config.protected_paths,
+            diff_size_cap=engine_config.grader_diff_size_cap,
+        )
 
     def recorder(
         task: Task, outcome: DispatchOutcome, verdict: GradeVerdict, merged: bool

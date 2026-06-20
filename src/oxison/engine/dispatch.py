@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import shutil
 import signal
 from pathlib import Path
 
@@ -344,6 +345,7 @@ async def launch_worker(
     # worktree (+ scoped .git + ~/.claude) and its egress to the allowlist. The
     # settings file is written by the PARENT — srt reads it before sandboxing, so
     # it needs no allowlist entry. cwd stays the worktree; prompt stays positional.
+    scratch: Path | None = None  # per-task tmp dir; removed in the finally below
     if engine_config.sandbox_enabled:
         srt_binary = resolve_srt_binary(engine_config.srt_binary)
         if srt_binary is None:
@@ -417,6 +419,14 @@ async def launch_worker(
         # Redact any credential the worker surfaced into its log (M6/CWE-532) so
         # an unexpected exception can't leave the key in the persisted log.
         redact_secrets(log_path, worker_log_secrets(api_key, engine_config))
+        # Remove the per-task ephemeral dirs (#36 disk-retention): the worker's
+        # scratch/TMPDIR and, when worker-skills ran, its curated config dir. Both
+        # are pure throwaway state — cleanup previously only fired on re-dispatch,
+        # so a SUCCESSFUL run leaked them. The worktree itself is kept (audit trail
+        # + the --integrate path consumes it after the worker returns).
+        for ephemeral in (scratch, skill_config_dir):
+            if ephemeral is not None:
+                shutil.rmtree(ephemeral, ignore_errors=True)
 
     exit_code = proc.returncode
     changed = await changed_files(worktree, base_sha)
