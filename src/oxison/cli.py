@@ -274,6 +274,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="the git repository to build in (workers run in isolated worktrees)",
     )
     build_p.add_argument(
+        "--scaffold", action="store_true",
+        help="greenfield: if --repo is empty/absent, git-init it with an initial "
+             "commit first, so the build loop can implement a from-scratch roadmap "
+             "(e.g. one produced by `oxison ideate`) into a fresh repo. Refuses a "
+             "non-empty non-git dir.",
+    )
+    build_p.add_argument(
         "--dry-run", action="store_true",
         help="ingest the roadmap and show the plan; spawn NO build workers",
     )
@@ -741,7 +748,7 @@ def cmd_ideate(args: argparse.Namespace) -> int:
     print(f"  claude CLI    : {pre.claude_version}")
     print()
 
-    return asyncio.run(
+    rc = asyncio.run(
         greenfield_pipeline(
             cfg,
             user_guidance=user_guidance,
@@ -749,6 +756,51 @@ def cmd_ideate(args: argparse.Namespace) -> int:
             relevance_min_score=args.relevance_min_score,
         )
     )
+    if rc == 0:
+        from .oxipensa import ROADMAP_JSON_FILENAME
+        roadmap_path = cfg.output_dir / ROADMAP_JSON_FILENAME
+        if roadmap_path.is_file():
+            print("\n→ scaffold a fresh repo and build this roadmap:")
+            print(f"    oxison build {roadmap_path} --repo ./<new-dir> --scaffold")
+    return rc
+
+
+def _scaffold_repo(repo: Path) -> int:
+    """git-init a fresh repo at ``repo`` with one initial commit so ``oxison build``
+    has a base to implement a greenfield roadmap into (the build loop needs a
+    HEAD to branch workers from). Refuses a non-empty, non-git directory — it will
+    only scaffold an empty or not-yet-existing path, never over existing files."""
+    import subprocess
+
+    if repo.exists() and any(repo.iterdir()):
+        print(f"oxison: --scaffold target is non-empty and not a git repo: {repo}\n"
+              "  point --repo at an empty or new directory (won't scaffold over files).")
+        return 2
+    repo.mkdir(parents=True, exist_ok=True)
+
+    def _git(*a: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["git", "-C", str(repo), *a],
+                              capture_output=True, text=True, check=False)
+
+    if _git("init", "-q").returncode != 0:
+        print(f"oxison: --scaffold: git init failed in {repo}")
+        return 3
+    (repo / "README.md").write_text(
+        f"# {repo.name}\n\nScaffolded by `oxison build --scaffold`; the build loop "
+        "implements the roadmap into this repo.\n", encoding="utf-8")
+    _git("add", "-A")
+    # Inline identity so the initial commit succeeds even where the host git has
+    # no user.name/email configured (a fresh CI/container).
+    commit = subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=oxison",
+         "-c", "user.email=oxison@localhost", "commit", "-qm", "scaffold: initial commit"],
+        capture_output=True, text=True, check=False,
+    )
+    if commit.returncode != 0:
+        print(f"oxison: --scaffold: initial commit failed: {commit.stderr.strip()[:200]}")
+        return 3
+    print(f"  scaffolded a fresh git repo at {repo} (initial commit)")
+    return 0
 
 
 def cmd_build(args: argparse.Namespace) -> int:
@@ -773,8 +825,13 @@ def cmd_build(args: argparse.Namespace) -> int:
     )
 
     repo = Path(args.repo).expanduser().resolve()
+    if args.scaffold and not (repo / ".git").exists():
+        scaffold_rc = _scaffold_repo(repo)
+        if scaffold_rc != 0:
+            return scaffold_rc
     if not (repo / ".git").exists():
-        print(f"oxison: --repo is not a git repository: {repo}")
+        hint = " (pass --scaffold to git-init a fresh one for a greenfield build)"
+        print(f"oxison: --repo is not a git repository: {repo}{hint}")
         return 2
 
     try:
