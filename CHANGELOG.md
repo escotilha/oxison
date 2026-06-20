@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Security
+- **Document parsers now have a parse-time cap (SECURITY-AUDIT F7, parse-timeout
+  half).** A small-but-pathological source file (tiny on disk, but expensive to
+  parse — quadratic allocation, xref/decompression loops) is skipped after
+  `EXTRACT_TIMEOUT_S` (30 s) instead of hanging ingest in-process. Completes F7
+  alongside the already-shipped 64 MiB size cap. (F2's `--api-key` argv exposure
+  stays a help-text steer toward the env var — a true runtime argv scrub is
+  ineffective without a process-title dependency, not worth it when the env-var
+  path avoids the exposure entirely.)
+
 ### Changed
 - **`--integrate` protected branches are now configurable (`--protected-branches`, #69).**
   Defaults to `main,master`; pass e.g. `--protected-branches main,develop,trunk` for a
