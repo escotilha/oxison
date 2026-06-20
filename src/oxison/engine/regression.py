@@ -191,9 +191,19 @@ class RegressionVerifier:
         self._lock = asyncio.Lock()
 
     async def _run(self, worktree: Path, *, label: str) -> bool:
+        # Scope the srt write-allowlist to the RIGHT git dir. A *linked* worktree
+        # (srt mode) has a ``.git`` FILE pointing into the main repo, so it
+        # genuinely needs the main repo's ``.git`` writable → ``repo=self._repo``.
+        # A *self-contained clone* (container mode) has its own ``.git`` DIR inside
+        # the worktree and must NOT get write access to the main repo's ``.git`` —
+        # that cross-repo write is exactly the isolation the container layer exists
+        # to provide, and the test code here is untrusted. So scope to the clone
+        # itself (its ``.git`` is already inside ``worktree``, so the deny-write
+        # carve-outs for ``config``/``hooks`` still apply).
+        effective_repo = worktree if (worktree / ".git").is_dir() else self._repo
         return await run_tests_sandboxed(
             worktree=worktree,
-            repo=self._repo,
+            repo=effective_repo,
             test_command=self._test_command,
             engine_config=self._cfg,
             srt_binary=self._srt,
